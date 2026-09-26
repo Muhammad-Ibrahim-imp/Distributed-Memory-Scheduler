@@ -1,0 +1,9 @@
+scheduler:
+  policy: "least_loaded"        # or "round_robin", "weighted", etc.
+  scoring_weights:
+    free_ram: 0.4
+    cpu_load: 0.3
+    network_latency: 0.2
+    node_health: 0.1
+  security:
+    exclude_quarantined_nodes: true
