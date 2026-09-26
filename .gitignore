@@ -1,0 +1,5 @@
+# Claude Code local settings and session state
+.claude/
+
+# Personal M5 implementation plan (kept out of the shared repo)
+M5-Implementation-Plan.md
