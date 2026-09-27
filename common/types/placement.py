@@ -4,3 +4,4 @@ from dataclasses import dataclass
 class PlacementDecision:
     object_id: str
     node_id: str
+    score: float
