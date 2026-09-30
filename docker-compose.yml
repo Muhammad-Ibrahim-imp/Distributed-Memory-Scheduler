@@ -1,0 +1,60 @@
+# Local dev/testing rig (README §22.1). Real integration runs on separate machines.
+# Every service runs the wiring stub until its real entry point exists; replace
+# each `command` with the real one (for example python -m coordinator.main).
+#
+# Local rehearsal (one Docker host): `docker compose up` starts all three
+# services together, so the host already runs a node + client on one machine.
+#
+# Real multi-machine deployment, one laptop per role: run only that laptop's
+# services and skip depends_on, so a client laptop doesn't spin up its own
+# coordinator. Point SECURITY_HOST/SECURITY_PORT at the real coordinator's
+# LAN IP via .env or an environment override.
+#   coordinator laptop:                docker compose up --no-deps coordinator
+#   a plain memory-node laptop:        docker compose up --no-deps node
+#   client laptop that ALSO wants to
+#   contribute RAM (the node keeps its
+#   own identity, separate from client): docker compose up --no-deps node client
+services:
+  coordinator:                # Security + DSM Runtime + Scheduler, one process
+    build: .
+    command: python -m scripts.stub_service
+    environment:
+      SERVICE_ROLE: coordinator
+      LISTEN_PORT: "8443"
+      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:-}
+      DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:-}
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./configs:/app/configs:ro
+      - coordinator-data:/app/data
+    networks: [dsm-net]
+
+  node:                       # scale with: docker compose up --scale node=3
+    build: .
+    command: python -m scripts.stub_service
+    environment:
+      SERVICE_ROLE: node
+      SECURITY_HOST: coordinator
+      SECURITY_PORT: "8443"
+      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:-}
+    mem_limit: 512m
+    depends_on: [coordinator]
+    networks: [dsm-net]
+
+  client:                     # runs the application adapters
+    build: .
+    command: python -m scripts.stub_service
+    environment:
+      SERVICE_ROLE: client
+      SECURITY_HOST: coordinator
+      SECURITY_PORT: "8443"
+      DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:-}
+    depends_on: [coordinator]
+    networks: [dsm-net]
+
+networks:
+  dsm-net: {}
+
+volumes:
+  coordinator-data: {}

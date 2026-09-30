@@ -1,0 +1,30 @@
+# Policy values from SECURITY_POLICY.md. Change a value here and restart the
+# coordinator; no code changes. Secrets do NOT go in this file.
+token:
+  ttl_seconds: 300
+
+replay_protection:            # M5 defines, B1 enforces
+  window_seconds: 60
+  clock_skew_tolerance_seconds: 5
+
+rate_limit:
+  connection_level:           # B1
+    bucket_capacity: 20
+    refill_per_second: 5
+  node_level:                 # A1; numbers pending A1's input
+    max_memory_per_client: null
+    max_objects_per_client: null
+
+trust_state:
+  suspicious_trigger:
+    failed_auths_per_window: 3
+    window_seconds: 60
+  recovery_clean_period_seconds: 300
+
+enrollment:                   # names of the environment variables, not the secrets
+  node_secret_env: DSM_NODE_ENROLLMENT_SECRET
+  client_secret_env: DSM_CLIENT_ENROLLMENT_SECRET
+  denylist_path: data/denylist.json
+
+audit:
+  path: data/audit.jsonl

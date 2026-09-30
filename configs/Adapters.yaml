@@ -1,0 +1,8 @@
+# Starting values only; tune them with the Week 4 benchmarks.
+image_processing:
+  tile_height: 256
+  tile_width: 256
+  halo: 0                     # overlap in pixels, needed for filters that read neighbours
+
+matrix_multiplication:
+  block_size: 512
