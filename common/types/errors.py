@@ -34,6 +34,17 @@ class OutOfCapacityError(DSMError):
     """No node has enough free capacity for the allocation."""
 
 
+class QuotaExceededError(DSMError):
+    """The caller's own quota is exhausted (policy §5: max_memory_per_client
+    or max_objects_per_client). Raised by A1 at node level.
+
+    Distinct from OutOfCapacityError, deliberately: that one means the cluster
+    is full and nobody could allocate here; this one means the cluster has room
+    but *this* client is not allowed to use more of it. Conflating them sends
+    the reader looking at cluster-wide free RAM when the real answer is one
+    client's cap. Retrying will not help until the client frees something."""
+
+
 class InvalidRequestError(DSMError):
     """The request is malformed (bad size, bad id, ...)."""
 
@@ -49,7 +60,8 @@ class IntegrityError(DSMError):
 
 
 # --- Raised by the security pipeline (M5 / B1) ------------------------------
-# Wire codes: AUTH_REJECTED, TOKEN_INVALID, TOKEN_EXPIRED, RATE_LIMITED.
+# Wire codes: AUTH_REJECTED, TOKEN_INVALID, TOKEN_EXPIRED, RATE_LIMITED,
+# QUOTA_EXCEEDED (B1: QuotaExceededError raises this fifth code).
 # Replay and tamper rejections surface as AuthenticationError unless B1 asks
 # for dedicated codes.
 

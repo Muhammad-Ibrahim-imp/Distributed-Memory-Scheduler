@@ -81,6 +81,46 @@ class EventType(str, Enum):
     CLIENT_REGISTERED = "client_registered"
     ENROLLMENT_FAILED = "enrollment_failed"
     ENROLLMENT_DENIED = "enrollment_denied"
+    # Transport-layer events, reported by B1 (policy §9.2 steps 1, 2, 5).
+    # Only TLS_CERTIFICATE_REJECTED escalates -- see SINGLE_EVENT_ESCALATORS.
+    TLS_HANDSHAKE_FAILURE = "tls_handshake_failure"
+    TLS_CERTIFICATE_REJECTED = "tls_certificate_rejected"
+    ENVELOPE_MALFORMED = "envelope_malformed"
+    TIMESTAMP_OUT_OF_WINDOW = "timestamp_out_of_window"
+    CONNECTION_FORCE_CLOSED = "connection_force_closed"
+    # Node-local events, reported by A1 (policy §10.1). A failed secure delete
+    # does NOT escalate -- see SINGLE_EVENT_ESCALATORS.
+    SECURE_DELETE_FAILED = "secure_delete_failed"
+
+
+# Policy §6.4: one event of one of these types alone moves TRUSTED -> SUSPICIOUS.
+#
+# AUTH_FAILURE and RATE_LIMIT_VIOLATION are deliberately absent: they escalate
+# only on repetition (3 failed auths / 60s), so that threshold counting lives in
+# security/quarantine/trust_state.py, not in a flat set of types.
+#
+# TIMESTAMP_OUT_OF_WINDOW is absent for a different reason: a timestamp outside
+# the window is usually clock skew, not an attack. Escalating on it would let a
+# node with an un-synced clock quarantine itself. Only actual nonce reuse
+# (REPLAY_DETECTED) escalates. Same reasoning excludes TLS_HANDSHAKE_FAILURE
+# and ENVELOPE_MALFORMED -- both are routine on a lossy network or mid-
+# integration, and TLS_CERTIFICATE_REJECTED is the one that means someone
+# presented a credential they should not have had.
+#
+# SECURE_DELETE_FAILED is absent too, but it is the uncomfortable one: a
+# failed wipe means data that should be gone may still be readable. That is a
+# real exposure, so it logs at WARNING -- but it is an operational failure, not
+# evidence the node turned hostile, so it does not move trust state. Severity
+# and escalation are separate axes: loud in the log, no change to the node.
+# If A1 ever sees a node fail wipes *repeatedly*, that is a different signal
+# and should come back to M5 as a proposal rather than being inferred here.
+SINGLE_EVENT_ESCALATORS = frozenset(
+    {
+        EventType.REPLAY_DETECTED,
+        EventType.TAMPER_DETECTED,
+        EventType.TLS_CERTIFICATE_REJECTED,
+    }
+)
 
 
 # Policy §10.3: these must never appear in a log entry. Log `token_ref`
