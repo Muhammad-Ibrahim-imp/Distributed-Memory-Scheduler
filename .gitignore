@@ -4,9 +4,6 @@
 # Personal M5 implementation plan (kept out of the shared repo)
 M5-Implementation-Plan.md
 
-#Security Policy
-SECURITY_POLICY.md
-
 # Python bytecode and caches
 __pycache__/
 *.py[cod]
