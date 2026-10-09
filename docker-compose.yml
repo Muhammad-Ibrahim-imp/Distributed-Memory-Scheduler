@@ -21,6 +21,7 @@ services:
     environment:
       SERVICE_ROLE: coordinator
       LISTEN_PORT: "8443"
+      DSM_TOKEN_KEY: ${DSM_TOKEN_KEY:-}      # Fernet key; empty = ephemeral dev key
       DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:-}
       DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:-}
     ports:

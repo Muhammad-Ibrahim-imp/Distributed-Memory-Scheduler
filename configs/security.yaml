@@ -28,3 +28,5 @@ enrollment:                   # names of the environment variables, not the secr
 
 audit:
   path: data/audit.jsonl
+  max_bytes: 5242880          # rotate the log at 5 MiB
+  backup_count: 5
