@@ -73,6 +73,7 @@ class EventType(str, Enum):
     TOKEN_ISSUED = "token_issued"
     TOKEN_REFRESHED = "token_refreshed"
     TOKEN_EXPIRED = "token_expired"
+    SESSION_REVOKED = "session_revoked"
     TRUST_TRANSITION = "trust_transition"
     RATE_LIMIT_VIOLATION = "rate_limit_violation"
     REPLAY_DETECTED = "replay_detected"
