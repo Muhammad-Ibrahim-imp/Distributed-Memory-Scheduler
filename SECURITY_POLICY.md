@@ -96,9 +96,10 @@ A **credential** is a long-lived secret proving "I am this identity," used **rar
 ### 3.3 Token — format and TTL
 
 - **Format: Fernet** (Python `cryptography` library — already in the team's stack).
-- **Payload:** `{"identity": "<uuid>", "issued_at": <timestamp>}`.
+- **Payload:** `{"identity": "<uuid>", "role": "<role>", "session_id": "<uuid>", "issued_at": <timestamp>}`. `identity` is the only claim the pipeline acts on; `role` and `session_id` are carried so a session can be cancelled early — see §3.7.
 - **TTL: 300 seconds.**
-- **Expiry check:** `Fernet(key).decrypt(token, ttl=300)` — one call verifies signature, checks TTL, decrypts, in that order. No separately stored expiry.
+- **Expiry check:** `Fernet(key).decrypt_at_time(token, ttl=300, now)` — one call verifies signature, checks TTL, decrypts, in that order. No separately stored expiry. `decrypt_at_time` rather than `decrypt(token, ttl=...)` because it takes the clock explicitly, which is what makes TTL testable without sleeping.
+- **Tamper vs. expiry:** `cryptography` raises the *same* `InvalidToken` for a failed HMAC and for an expired TTL. `verify_token` separates them by decrypting a second time *without* a TTL: if that also fails the token is forged (`TokenInvalidError`), and if it succeeds the token was genuine but old (`TokenExpiredError`, retryable). §6.6 and §9.4 both depend on that split.
 - **Refresh:** on expiry, the client re-presents its credential to obtain a new token.
 
 ### 3.4 Why Fernet, not JWT
@@ -113,9 +114,25 @@ The Fernet key must be identical across every process that issues/verifies token
 
 | Member | Builds | Deliverable | Self-test |
 |---|---|---|---|
-| **M5** | Key generation/storage, issue/verify functions | `security/authentication/tokens.py` — `issue_token(identity)`, `verify_token(token)` | Token verifies within TTL, fails after, fails if tampered |
+| **M5** | Key generation/storage, issue/verify functions | `security/authentication/tokens.py` — `issue_token(identity, role, session_id)`, `verify_token(token) -> TokenClaims` | Token verifies within TTL, fails after, fails if tampered |
 | **A1/adapters** | Store issued token, attach to requests, re-auth on `InvalidToken` | Refresh logic | Expired-token request triggers transparent re-auth + retry |
 | **B1** | Transmit token in envelope; distinguish `TOKEN_EXPIRED` from other rejections | Envelope carries `token`; distinct error codes | Expired vs. tampered distinguishable in error handling |
+
+### 3.7 Sessions — why a token also carries `session_id`
+
+A Fernet token is self-contained: it expires on its own and needs no server-side record to be *valid*. That is deliberate (§3.4), and it is also the limitation — a self-contained token cannot be cancelled before its TTL runs out. Logging out, or revoking one machine's access without revoking the whole identity, would otherwise be impossible.
+
+So M5 keeps a small **session registry** (`security/sessions/manager.py`) mapping `session_id` → (identity, role, created, expires, revoked). It is **not** a token store — the token's own Fernet check is still what proves authenticity. The registry only ever *removes* validity:
+
+- **No record, or a record for a different identity** → rejected as `TokenInvalidError`. Fail-closed: if the registry is lost, tokens stop working rather than working forever.
+- **`revoke`** / **`logout`** kills one session; the identity's other sessions keep working.
+- **`revoke_all`** kills every session for an identity — this is what `revoke_identity` (§7) calls when a trust state goes terminal.
+
+Each kill logs `session_revoked`.
+
+**Cost.** One dict lookup per validated request, in the same process (§12.1). **Benefit.** Revocation takes effect immediately instead of up to 300 seconds late — which matters because that window is exactly when a revoked node could still be reading.
+
+**Known limitation (open item, §14).** The registry is in-memory, so a coordinator restart drops every session record and invalidates every outstanding token. With a 300-second TTL that is an available trade — clients simply re-authenticate — and it fails in the safe direction. If coordinator restart ever needs to be invisible to clients, the registry has to persist; that is the same open item as coordinator persistence.
 
 ### 🔔 Request to B1
 Confirm your error schema can carry distinct codes: `TOKEN_EXPIRED` / `TOKEN_INVALID` / `AUTH_REJECTED`.
@@ -264,7 +281,7 @@ REVOKED      → excluded + active connections force-closed
 | Invalid credential | Reject request | Counts toward the "3 failed auths/60s" trigger |
 | Expired token | Reject, prompt refresh | None (routine, not a violation) |
 | Replay detected | Reject request | TRUSTED→SUSPICIOUS trigger (single event) |
-| Tampered request (integrity failure) | Reject | TRUSTED→SUSPICIOUS trigger (single event) |
+| Tampered request (token integrity check failed) | Reject | TRUSTED→SUSPICIOUS trigger (single event). Detected inside M5's `verify_token`, **not** by an envelope payload hash — see §3.6 and §9.3 |
 | Rate-limit violation | Reject/throttle | Repeated violations → TRUSTED→SUSPICIOUS trigger |
 | Unauthorized object access | Reject | Logged; does not by itself escalate node trust state (this is an authorization event, not evidence the *node* is compromised — flag to M5 if you think this should also escalate) |
 | Any violation while SUSPICIOUS | Reject + escalate | → QUARANTINED |
@@ -419,13 +436,46 @@ Incoming request
 ### 🔔 Request to A1, A2, B1, B2 (all)
 Please confirm this ordering matches how you're building your part of the pipeline, or propose changes at the Week 2 sync. This needs to be agreed once, not discovered as a mismatch during Week 6 integration.
 
+### 9.3 Pre-authentication messages — the pipeline's one exception
+
+The pipeline above assumes the request carries a token. A brand-new node has none, so two message types must be accepted **before** step 3:
+
+```
+Register   first contact. Carries the enrollment secret. Returns (identity, credential).
+Refresh    re-presents a credential to replace an expired token (§3.3).
+```
+
+Rules for both:
+
+- **Only these two.** Every other message type requires a verified token.
+- **Rate-limited by source IP**, not by identity. §5.2 keys its limiter on identity, which by definition does not exist yet, so IP is the only available key — the single place in the design where IP is a rate-limit key.
+- **`Register` is where enrollment control lands.** Without a check at this point, anyone who can reach the coordinator can register — which is precisely how a REVOKED node comes back. §6.4 makes REVOKED terminal for the *identity*, and nothing currently stops the same machine minting a new one. The enrollment secret is what closes that (open item, §14).
+
+**Why this is an exception rather than a hole:** both messages are inherently unauthenticated, so their only defences are the enrollment secret and the IP-keyed limiter. Neither grants access to DSM data — `Register` mints an identity, and `Refresh` re-mints a token only for a credential that is still checked against its stored hash (§3.2).
+
+### 9.4 Tamper detection lives in verify_token, not in a payload hash
+
+Worth stating explicitly because it is the obvious thing to build twice. Three mechanisms could appear to detect tampering:
+
+| Mechanism | What it actually protects | Needed? |
+|---|---|---|
+| TLS (B1, §9.2 step 1) | Integrity **in flight**, per connection | Yes — already in the plan |
+| Fernet HMAC inside the token (§3.3) | Integrity **of the token itself** | Yes — free, already there |
+| SHA-256 of the payload in the envelope | Integrity of the payload **after TLS terminates** | **No** — see below |
+
+A payload hash would only add protection this design can use if something modifies a request *after* TLS has been terminated — a terminating proxy, or a compromised hop. This deployment has neither: the coordinator terminates TLS itself, in-process (§12). Adding it would hash every payload on every request to re-measure what TLS already checked, on hardware that is a student laptop.
+
+So `TAMPER_DETECTED` means **the token's Fernet integrity check failed**. B1 already sees this: `cryptography` raises `InvalidToken` for a bad HMAC and for an expired TTL alike, and `verify_token` (§3.6) is what separates them into `TokenInvalidError` and `TokenExpiredError`. B1 maps the first to the `TOKEN_INVALID` wire code and reports `TAMPER_DETECTED`; the second is `TOKEN_EXPIRED`, routine, and escalates nothing (§6.6).
+
+If a TLS-terminating proxy ever enters the deployment, revisit this — that is the condition that would justify the payload hash.
+
 ---
 
 ## 10. Audit Logging
 
 ### 10.1 What gets logged
 
-Every security-relevant decision point: authentication attempts (success **and** failure), authorization denials, session issuance/refresh/expiry, every trust-state transition (with trigger), rate-limit violations, nonce/replay detections, tampered-request detections, node registration events, quota breaches (`QuotaExceededError`), the transport-layer events B1 reports — `tls_handshake_failure`, `tls_certificate_rejected`, `envelope_malformed`, `timestamp_out_of_window`, `connection_force_closed` — and A1's node-local `secure_delete_failed`.
+Every security-relevant decision point: authentication attempts (success **and** failure), authorization denials, session issuance/refresh/expiry **and revocation** (`session_revoked`), every trust-state transition (with trigger), rate-limit violations, nonce/replay detections, tampered-request detections, node registration events, quota breaches (`QuotaExceededError`), the transport-layer events B1 reports — `tls_handshake_failure`, `tls_certificate_rejected`, `envelope_malformed`, `timestamp_out_of_window`, `connection_force_closed` — and A1's node-local `secure_delete_failed`.
 
 ### 10.2 Entry format
 
@@ -551,6 +601,8 @@ M5 does **not** build: TLS/sockets/nonce-tracking/rate-limit enforcement (B1), n
 | B1 | Propose `event_type` values for transport-layer security events |
 | B2 | Confirm §6.3 permission table and whether SUSPICIOUS needs a score penalty vs. hard exclusion |
 | All | Confirm the canonical pipeline order (§9) |
+| All | **Open:** agree the enrollment secret that gates pre-auth `Register` (§9.3) — where it is stored, how it is rotated, and how a node receives it |
+| All | **Open:** whether the session registry must persist across coordinator restarts, or a 300 s re-authentication after restart is acceptable (§3.7) |
 
 ---
 
