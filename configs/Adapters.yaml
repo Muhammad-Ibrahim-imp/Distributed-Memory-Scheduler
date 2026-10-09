@@ -1,8 +1,13 @@
 # Starting values only; tune them with the Week 4 benchmarks.
+max_concurrency: 8              # parallel DSM alloc/write/read calls per adapter
+
 image_processing:
   tile_height: 256
   tile_width: 256
-  halo: 0                     # overlap in pixels, needed for filters that read neighbours
+  halo: 0                       # overlap in pixels, needed for filters that read neighbours
+  target_chunk_bytes: 4194304   # only used when tile_height/tile_width are null
+  max_image_bytes: 536870912    # reject decoded images over 512 MiB
+  read_mode: color              # color | grayscale | unchanged
 
 matrix_multiplication:
   block_size: 512
