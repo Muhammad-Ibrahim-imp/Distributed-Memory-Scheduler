@@ -135,7 +135,7 @@ Each kill logs `session_revoked`.
 **Known limitation (open item, §14).** The registry is in-memory, so a coordinator restart drops every session record and invalidates every outstanding token. With a 300-second TTL that is an available trade — clients simply re-authenticate — and it fails in the safe direction. If coordinator restart ever needs to be invisible to clients, the registry has to persist; that is the same open item as coordinator persistence.
 
 ### 🔔 Request to B1
-Confirm your error schema can carry distinct codes: `TOKEN_EXPIRED` / `TOKEN_INVALID` / `AUTH_REJECTED`.
+Confirm your error schema can carry these codes distinctly for the token path: `TOKEN_EXPIRED` / `TOKEN_INVALID` / `AUTH_REJECTED`. (The full envelope-level set — which also includes `RATE_LIMITED` and `QUOTA_EXCEEDED` — is listed in §14.)
 
 ---
 
@@ -449,7 +449,7 @@ Rules for both:
 
 - **Only these two.** Every other message type requires a verified token.
 - **Rate-limited by source IP**, not by identity. §5.2 keys its limiter on identity, which by definition does not exist yet, so IP is the only available key — the single place in the design where IP is a rate-limit key.
-- **`Register` is where enrollment control lands.** Without a check at this point, anyone who can reach the coordinator can register — which is precisely how a REVOKED node comes back. §6.4 makes REVOKED terminal for the *identity*, and nothing currently stops the same machine minting a new one. The enrollment secret is what closes that (open item, §14).
+- **`Register` is where enrollment control lands.** Without a check at this point, anyone who can reach the coordinator can register — which is precisely how a REVOKED node comes back. §6.4 makes REVOKED terminal for the *identity*, and nothing currently stops the same machine minting a new one. The enrollment secret is **the first half** of what closes that: it keeps an *uninvited* machine out, but not one that enrolled and was later revoked, because the secret is shared and a revoked node still holds it. The second half is a stable machine identifier — the TLS client certificate fingerprint, which B1 already has from terminating TLS — so the denylist has something stable to key on rather than a name the node chooses for itself (open items, §14).
 
 **Why this is an exception rather than a hole:** both messages are inherently unauthenticated, so their only defences are the enrollment secret and the IP-keyed limiter. Neither grants access to DSM data — `Register` mints an identity, and `Refresh` re-mints a token only for a credential that is still checked against its stored hash (§3.2).
 
@@ -595,10 +595,11 @@ M5 does **not** build: TLS/sockets/nonce-tracking/rate-limit enforcement (B1), n
 | A2 | Confirm ownership-check interface/call |
 | A2 | Confirm revoked-node notification method and object-handling policy (§7.4) |
 | B1 | Confirm envelope field name/location for `identity` |
-| B1 | Confirm distinct error codes: `TOKEN_EXPIRED` / `TOKEN_INVALID` / `AUTH_REJECTED` / `RATE_LIMITED` |
+| B1 | Confirm distinct error codes: `TOKEN_EXPIRED` / `TOKEN_INVALID` / `AUTH_REJECTED` / `RATE_LIMITED` / `QUOTA_EXCEEDED` |
 | B1 | Confirm ownership of nonce-tracking/replay enforcement (§4) and the reporting call signature |
 | B1 | Confirm `force_close_connection(identity)` as an in-process call (§7, §12) |
 | B1 | Propose `event_type` values for transport-layer security events |
+| B1 | **Open:** carry a stable machine identifier on `Register` — the TLS client certificate fingerprint — so a REVOKED machine cannot re-register under a fresh identity. The enrollment secret is shared and a revoked node still holds it, so it cannot close this on its own (§9.3, §6.4) |
 | B2 | Confirm §6.3 permission table and whether SUSPICIOUS needs a score penalty vs. hard exclusion |
 | All | Confirm the canonical pipeline order (§9) |
 | All | **Open:** agree the enrollment secret that gates pre-auth `Register` (§9.3) — where it is stored, how it is rotated, and how a node receives it |
