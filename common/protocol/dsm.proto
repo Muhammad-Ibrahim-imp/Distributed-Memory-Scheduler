@@ -9,13 +9,26 @@ message Envelope {
   double timestamp = 5;
   oneof payload {
     Register register = 10;
-    Refresh refresh = 11;
-    ReadRequest read = 12;
-    WriteRequest write = 13;
-    FreeRequest free = 14;
-    // AllocateRequest alloc = 15;  // PENDING A1 CONFIRMATION
-    ErrorResponse error = 20;
-    NodeStatsReport node_stats = 21;
+    RegisterResponse register_response = 11;
+    Refresh refresh = 12;
+    RefreshResponse refresh_response = 13;
+
+    AllocateRequest allocate = 20;
+    AllocateResponse allocate_response = 21;
+
+    ReadRequest read = 22;
+    ReadResponse read_response = 23;
+
+    WriteRequest write = 24;
+    WriteResponse write_response = 25;
+
+    FreeRequest free = 26;
+    FreeResponse free_response = 27;
+
+    StatsRequest stats = 28;
+    NodeStatsReport node_stats = 29;
+
+    ErrorResponse error = 30;
   }
 }
 
@@ -75,4 +88,42 @@ message SecurityEvent {
   string result = 6;
   string request_id = 7;
   map<string, string> extra = 8;
+}
+
+message AllocateRequest {
+  string request_id = 1;
+  uint64 size = 2;
+}
+
+message AllocateResponse {
+  string request_id = 1;
+  string object_id = 2;
+}
+
+message ReadResponse {
+  string request_id = 1;
+  bytes data = 2;
+}
+
+message WriteResponse {
+  string request_id = 1;
+}
+
+message FreeResponse {
+  string request_id = 1;
+}
+
+message StatsRequest {
+  string request_id = 1;
+}
+
+message RegisterResponse {
+  string request_id = 1;
+  string identity = 2;
+  string credential = 3;
+}
+
+message RefreshResponse {
+  string request_id = 1;
+  string token = 2;
 }
