@@ -1,0 +1,7 @@
+# Nodes register themselves with the coordinator, so this list is optional.
+# Use it when addresses are fixed (multi_machine mode). Ports are for A1/B1 to fill in.
+nodes: []
+# nodes:
+#   - label: laptop-a
+#     host: 192.168.1.50
+#     port: null

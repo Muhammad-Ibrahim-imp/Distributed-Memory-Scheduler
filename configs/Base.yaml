@@ -1,0 +1,9 @@
+# Shared settings for every component.
+# The environment variables SECURITY_HOST and SECURITY_PORT override the
+# deployment block, so a component can be pointed elsewhere without editing this file.
+log_level: INFO
+
+deployment:
+  mode: docker_single_host      # docker_single_host | multi_machine
+  security_host: coordinator    # multi_machine: the coordinator laptop's LAN IP
+  security_port: 8443

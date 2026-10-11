@@ -1,0 +1,9 @@
+{
+  "policy": "balanced",
+  "ram_weight": 0.30,
+  "cpu_weight": 0.20,
+  "latency_weight": 0.15,
+  "bandwidth_weight": 0.15,
+  "health_weight": 0.10,
+  "access_frequency_weight": 0.10
+}
