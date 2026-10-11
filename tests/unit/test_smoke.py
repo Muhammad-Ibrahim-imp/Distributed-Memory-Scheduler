@@ -1,5 +1,5 @@
 from dsm.directory.directory import Directory, ObjectRecord, ObjectState
-from tests.fakes import FakeMemoryNode, FakeScheduler
+from tests.mocks.fakes import FakeMemoryNode, FakeScheduler
 
 
 async def test_fake_node_roundtrip():

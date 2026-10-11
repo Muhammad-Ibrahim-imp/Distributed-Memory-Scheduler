@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+# use the real enum so identity checks like "is TrustState.REVOKED" work
+from common.types.security import TrustState
 
 # shared error from M5's frozen file; if the name differs on main, fix this import
 from common.types.errors import ObjectNotFoundError
@@ -57,5 +59,5 @@ class FakeTrustReader:
         self._states[node_id] = state
 
     def get_trust_state(self, node_id: str) -> str:
-        # synchronous dict lookup. "TRUSTED" is a placeholder until M5 sends the real enum values
-        return self._states.get(node_id, "TRUSTED")
+        # default is the enum member not a plain string
+        return self._states.get(node_id, TrustState.TRUSTED)
