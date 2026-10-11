@@ -1,0 +1,78 @@
+syntax = "proto3";
+package dsm.protocol;
+
+message Envelope {
+  uint32 protocol_version = 1;
+  string identity = 2;
+  string token = 3;
+  string nonce = 4;
+  double timestamp = 5;
+  oneof payload {
+    Register register = 10;
+    Refresh refresh = 11;
+    ReadRequest read = 12;
+    WriteRequest write = 13;
+    FreeRequest free = 14;
+    // AllocateRequest alloc = 15;  // PENDING A1 CONFIRMATION
+    ErrorResponse error = 20;
+    NodeStatsReport node_stats = 21;
+  }
+}
+
+message Register {
+  string enrollment_secret = 1;
+  string role = 2;
+  string label = 3;
+}
+
+message Refresh {
+  string identity = 1;
+  string credential = 2;
+}
+
+message ReadRequest {
+  string request_id = 1;
+  string object_id = 2;
+  string owner_identity = 3;
+}
+
+message WriteRequest {
+  string request_id = 1;
+  string object_id = 2;
+  string owner_identity = 3;
+  bytes data = 4;
+}
+
+message FreeRequest {
+  string request_id = 1;
+  string object_id = 2;
+  string owner_identity = 3;
+}
+
+message NodeStatsReport {
+  string node_id = 1;
+  uint64 total_memory = 2;
+  uint64 used_memory = 3;
+  uint64 available_memory = 4;
+  double cpu_percent = 5;
+  uint64 object_count = 6;
+  double health = 7;
+}
+
+message ErrorResponse {
+  bool ok = 1;
+  string code = 2;
+  string message = 3;
+  string request_id = 4;
+}
+
+message SecurityEvent {
+  string event_id = 1;
+  double timestamp = 2;
+  string event_type = 3;
+  string severity = 4;
+  string actor_id = 5;
+  string result = 6;
+  string request_id = 7;
+  map<string, string> extra = 8;
+}
