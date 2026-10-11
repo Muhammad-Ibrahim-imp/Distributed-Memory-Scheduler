@@ -6,8 +6,8 @@ class ObjectMetadata:
     object_id: str
     owner: str
     size: int
-    sha256: str
     created_at: float
+    sha256: str | None = None   # None until the first write(), since alloc() has no data yet
 
 
 class MetadataStore:
