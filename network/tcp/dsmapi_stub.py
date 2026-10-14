@@ -2,6 +2,8 @@ import asyncio
 import time
 
 from common.protocol import dsm_pb2
+from common.types.errors import TokenExpiredError
+from network.security.tls import client_context
 from network.tcp.connection import Connection
 from network.tcp.errors import code_to_error
 
@@ -18,7 +20,9 @@ class RemoteDSMAPI:
         self._counter = 0
 
     async def connect(self):
-        reader, writer = await asyncio.open_connection(self.host, self.port)
+        reader, writer = await asyncio.open_connection(
+            self.host, self.port, ssl=client_context(), server_hostname="coordinator"
+        )
         self.connection = Connection(reader, writer)
         self.connection.start()
         await self._register()
@@ -51,12 +55,20 @@ class RemoteDSMAPI:
             raise RuntimeError(f"register failed: {resp.error.message}")
         self.identity = resp.register_response.identity
         self.credential = resp.register_response.credential
-        # Week 3 wires the real token flow.
 
     async def _call(self, env):
         resp = await self.connection.call(env)
         if resp.WhichOneof("payload") == "error":
-            raise code_to_error(resp.error.code, resp.error.message)
+            err = code_to_error(resp.error.code, resp.error.message)
+            if isinstance(err, TokenExpiredError) and self.refresh_callback is not None:
+                self.token = self.refresh_callback(self.token)
+                env.token = self.token
+                env.nonce = self._rid()   # NEW nonce; SAME request_id
+                resp = await self.connection.call(env)
+                if resp.WhichOneof("payload") == "error":
+                    raise code_to_error(resp.error.code, resp.error.message)
+                return resp
+            raise err
         return resp
 
     async def alloc(self, size: int) -> str:

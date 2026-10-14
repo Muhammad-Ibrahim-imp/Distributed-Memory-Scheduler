@@ -28,7 +28,9 @@ class NodeService:
             await asyncio.sleep(3)
 
     async def _connect_and_serve(self):
-        reader, writer = await asyncio.open_connection(self.host, self.port)
+        reader, writer = await asyncio.open_connection(
+            self.host, self.port, ssl=client_context(), server_hostname="coordinator"
+        )
         conn = Connection(reader, writer)
         conn.set_handler(self._handle)
         conn.start()

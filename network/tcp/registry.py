@@ -58,3 +58,5 @@ class NodeRegistry:
 
     def on_node_up(self, callback) -> None:
         self._listeners_up.append(callback)
+
+
