@@ -1,63 +1,50 @@
-from dataclasses import dataclass
-# use the real enum so identity checks like "is TrustState.REVOKED" work
-from common.types.security import TrustState
+# tests/mocks/fakes.py
+# fake memory node used by A2 tests, mirrors the agreed node API
+# alloc / read / write / free, ctx is always the first argument
 
-# shared error from M5's frozen file; if the name differs on main, fix this import
-from common.types.errors import ObjectNotFoundError
+from common.types.errors import (
+    ObjectNotFoundError,
+    OutOfCapacityError,
+    InvalidRequestError,
+)
 
 
-class FakeMemoryNode:
-    """Stand-in for A1's MemoryNodeAPI (async store/load/delete). Duck-typed so the
-    real node can replace it in week 4 without touching runtime code."""
+class FakeNodeClient:
+    def __init__(self, capacity_bytes=1024):
+        self.capacity = capacity_bytes   # pretend RAM limit of this node
+        self.used = 0                    # bytes reserved so far
+        self.reserved = {}               # object_id -> size reserved at alloc
+        self.data = {}                   # object_id -> stored bytes
+        self.owners = {}                 # object_id -> owner_identity
 
-    def __init__(self) -> None:
-        # object_id -> bytes
-        self._data: dict[str, bytes] = {}
+    async def alloc(self, ctx, node_id, object_id, owner_identity, size):
+        # reject at alloc time if the node cannot fit it, nothing waits until first write
+        if self.used + size > self.capacity:
+            raise OutOfCapacityError(f"node {node_id} is full")
+        self.reserved[object_id] = size
+        self.owners[object_id] = owner_identity
+        self.data[object_id] = b""       # object exists but is empty
+        self.used += size
 
-    async def store(self, object_id: str, owner: str, data: bytes) -> None:
-        # full replace only, A1 doesn't support partial or range writes
-        self._data[object_id] = data
-
-    async def load(self, object_id: str, owner: str) -> bytes:
-        # A1 raises not-found if it doesn't hold the object (directory can go stale)
-        if object_id not in self._data:
+    async def read(self, ctx, node_id, object_id, owner_identity):
+        # never allocated or already freed
+        if object_id not in self.data:
             raise ObjectNotFoundError(object_id)
-        return self._data[object_id]
+        return self.data[object_id]
 
-    async def delete(self, object_id: str, owner: str) -> None:
-        # A1 raises not-found here too; A2's free() must catch it and treat it as a no-op
-        if object_id not in self._data:
+    async def write(self, ctx, node_id, object_id, owner_identity, data):
+        # write does NOT create objects, only alloc does
+        if object_id not in self.data:
             raise ObjectNotFoundError(object_id)
-        del self._data[object_id]
+        # data must fit in the space reserved at alloc
+        if len(data) > self.reserved[object_id]:
+            raise InvalidRequestError("data larger than allocated size")
+        self.data[object_id] = data      # full replace, no partial writes
 
-
-@dataclass
-class FakePlacementDecision:
-    # same shape as B2's PlacementDecision
-    object_id: str
-    node_id: str
-    score: float | None = None
-
-
-class FakeScheduler:
-    """Stand-in for B2. Same method name and args as the real (sync) call."""
-
-    def select_node_from_state(self, object_id: str, object_size: int) -> FakePlacementDecision:
-        # always the same node, enough until the real scheduler is wired in
-        return FakePlacementDecision(object_id=object_id, node_id="node-1", score=1.0)
-
-
-class FakeTrustReader:
-    """Stand-in for M5's trust-state reader; only get_trust_state(node_id) is used."""
-
-    def __init__(self) -> None:
-        # node_id -> state; empty means everything is trusted
-        self._states: dict[str, str] = {}
-
-    def set_state(self, node_id: str, state: str) -> None:
-        # test helper to simulate a node going QUARANTINED or REVOKED
-        self._states[node_id] = state
-
-    def get_trust_state(self, node_id: str) -> str:
-        # default is the enum member not a plain string
-        return self._states.get(node_id, TrustState.TRUSTED)
+    async def free(self, ctx, node_id, object_id, owner_identity):
+        # free is idempotent, unknown or already freed id is a silent no-op
+        if object_id not in self.data:
+            return
+        self.used -= self.reserved.pop(object_id)   # give the space back
+        del self.data[object_id]
+        del self.owners[object_id]
