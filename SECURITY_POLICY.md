@@ -539,9 +539,11 @@ rate_limit:
   connection_level:      # B1
     bucket_capacity: 20
     refill_per_second: 5
-  node_level:             # A1 — numbers pending A1 input, see §5
-    max_memory_per_client: null
-    max_objects_per_client: null
+  node_level:             # A1, see §5
+    max_memory_fraction_per_client: 0.5   # a FRACTION of the node's own total
+                                          # capacity, so one value works across
+                                          # nodes of different sizes
+    max_objects_per_client: 10000         # absolute count, per client per node
 
 trust_state:
   suspicious_trigger:

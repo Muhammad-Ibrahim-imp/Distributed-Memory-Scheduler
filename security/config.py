@@ -37,8 +37,11 @@ class ConnectionRateLimit:               # B1
 
 @dataclass(frozen=True)
 class NodeRateLimit:                     # A1
-    max_memory_per_client: int | None = None
-    max_objects_per_client: int | None = None
+    # A FRACTION of the node's own total_capacity_bytes, not an absolute size.
+    # Nodes differ, so "half of this node" is the only form of this cap that
+    # means the same thing everywhere; A1 multiplies it by its own capacity.
+    max_memory_fraction_per_client: float | None = 0.5
+    max_objects_per_client: int | None = 10000
 
 
 @dataclass(frozen=True)
