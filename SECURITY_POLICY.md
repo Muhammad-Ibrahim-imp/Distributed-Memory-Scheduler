@@ -514,6 +514,12 @@ Every security-relevant decision point: authentication attempts (success **and**
 
 **`identity` is one value with three names.** It is `identity` in the registration record (§2.2) and the request envelope, `actor_id` in an audit event (§10.2), and `node_id` in the security status format (§7.1). These must always carry byte-identical strings: `actor_id` is what the escalation table keys on, so any divergence silently updates the wrong record — or none.
 
+**One exception — pre-authentication events.** Before a token is verified there may be no identity yet: a `Register`/`Refresh` flood is throttled by source IP (§9.3), and the only thing available to name the actor is the address, so B1 reports those with `actor_id = "ip:<addr>"`. This is the **only** `actor_id` that is not an identity, and it carries a rule:
+
+> **An `actor_id` with no registered identity is logged and never escalates.**
+
+The escalation table (§6.4) is keyed on an identity record. Without one there is nothing to move, so a pre-auth flood is throttled and logged but changes no trust state. This matters because the alternative is not a no-op: a pre-auth counter reaching its threshold (§6.4) would otherwise try to move the trust state of an actor that does not exist — at best a junk record, at worst an escalation against an unrelated node. Anything that *should* escalate on a pre-auth flood must escalate the address by its own deliberate mechanism, never by letting this field carry an identity it does not have.
+
 ### 🔔 Request to A1 (B1 resolved)
 B1's transport event types are now in §10.1. **A1 — still open:** propose the `event_type` string values you'd emit for local security violations you detect, so M5 can add them to the fixed category list in §10.1.
 
@@ -533,9 +539,11 @@ rate_limit:
   connection_level:      # B1
     bucket_capacity: 20
     refill_per_second: 5
-  node_level:             # A1 — numbers pending A1 input, see §5
-    max_memory_per_client: null
-    max_objects_per_client: null
+  node_level:             # A1, see §5
+    max_memory_fraction_per_client: 0.5   # a FRACTION of the node's own total
+                                          # capacity, so one value works across
+                                          # nodes of different sizes
+    max_objects_per_client: 10000         # absolute count, per client per node
 
 trust_state:
   suspicious_trigger:
@@ -599,7 +607,7 @@ M5 does **not** build: TLS/sockets/nonce-tracking/rate-limit enforcement (B1), n
 | B1 | Confirm ownership of nonce-tracking/replay enforcement (§4) and the reporting call signature |
 | B1 | Confirm `force_close_connection(identity)` as an in-process call (§7, §12) |
 | B1 | Propose `event_type` values for transport-layer security events |
-| B1 | **Open:** carry a stable machine identifier on `Register` — the TLS client certificate fingerprint — so a REVOKED machine cannot re-register under a fresh identity. The enrollment secret is shared and a revoked node still holds it, so it cannot close this on its own (§9.3, §6.4) |
+| B1 | **Open:** supply a stable machine identifier to the registration path — the TLS client certificate fingerprint (SHA-256 hex), extracted from the peer cert in the accept handler, **not** carried as an envelope field, since a field that must never be trusted will eventually be. Closes the gap where a REVOKED machine re-registers under a fresh identity; the enrollment secret cannot, because it is shared (§9.3, §6.4) |
 | B2 | Confirm §6.3 permission table and whether SUSPICIOUS needs a score penalty vs. hard exclusion |
 | All | Confirm the canonical pipeline order (§9) |
 | All | **Open:** agree the enrollment secret that gates pre-auth `Register` (§9.3) — where it is stored, how it is rotated, and how a node receives it |
