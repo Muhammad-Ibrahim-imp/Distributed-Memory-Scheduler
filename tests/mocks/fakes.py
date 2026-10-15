@@ -26,12 +26,6 @@ class FakeNodeClient:
         self.data[object_id] = b""       # object exists but is empty
         self.used += size
 
-    async def read(self, ctx, node_id, object_id, owner_identity):
-        # never allocated or already freed
-        if object_id not in self.data:
-            raise ObjectNotFoundError(object_id)
-        return self.data[object_id]
-
     async def write(self, ctx, node_id, object_id, owner_identity, data):
         # write does NOT create objects, only alloc does
         if object_id not in self.data:
@@ -41,6 +35,13 @@ class FakeNodeClient:
             raise InvalidRequestError("data larger than allocated size")
         self.data[object_id] = data      # full replace, no partial writes
 
+    async def read(self, ctx, node_id, object_id, owner_identity):
+        # never allocated or already freed
+        if object_id not in self.data:
+            raise ObjectNotFoundError(object_id)
+        return self.data[object_id]
+
+   
     async def free(self, ctx, node_id, object_id, owner_identity):
         # free is idempotent, unknown or already freed id is a silent no-op
         if object_id not in self.data:
