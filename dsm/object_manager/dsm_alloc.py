@@ -42,6 +42,7 @@ from common.types.errors import (
 )
 from common.types.placement import PlacementDecision
 from common.types.security import TrustState
+from dsm.cache import ObjectCache
 from dsm.directory.directory import Directory, ObjectRecord, ObjectState
 
 _NodeResult = TypeVar("_NodeResult")
@@ -97,6 +98,7 @@ class ObjectManager:
         security: AccessChecker,
         config: ObjectManagerConfig = ObjectManagerConfig(),
         node_timeout: float = 5.0,
+        cache: ObjectCache | None = None,
     ) -> None:
         """Create an Object Manager with its runtime dependencies."""
         if (
@@ -118,6 +120,7 @@ class ObjectManager:
         self.security = security
         self.config = config
         self.node_timeout = float(node_timeout)
+        self.cache = cache
         self._revoked_node_ids: set[str] = set()
 
     async def _call_node(self, coro: Awaitable[_NodeResult]) -> _NodeResult:
@@ -141,7 +144,10 @@ class ObjectManager:
         elif node_id in self._revoked_node_ids:
             return []
 
-        return self.directory.mark_node_state(node_id, object_state)
+        affected = self.directory.mark_node_state(node_id, object_state)
+        if self.cache is not None and object_state is ObjectState.REVOKED:
+            self.cache.invalidate_many(affected)
+        return affected
 
     def handle_node_revoked(self, node_id: str, timestamp: float) -> list[str]:
         """Handle M5's assumed revocation callback signature."""
@@ -247,14 +253,39 @@ class ObjectManager:
         if record.state is ObjectState.REVOKED:
             raise ObjectUnavailableError("object is on a revoked node")
 
+        if self.cache is not None:
+            cached_entry = self.cache.get(object_id)
+            if cached_entry is not None and cached_entry[0] == record.version:
+                return cached_entry[1]
+
+        # Capture before the await so a delayed reader cannot stamp new bytes with a later version.
+        version_before = record.version
         return await self._call_node(
-            self.node_client.read(
+            self._read_and_cache(
                 ctx,
-                record.node_id,
+                record,
                 object_id,
-                record.owner_identity,
+                version_before,
             )
         )
+
+    async def _read_and_cache(
+        self,
+        ctx: RequestContext,
+        record: ObjectRecord,
+        object_id: str,
+        version_before: int,
+    ) -> bytes:
+        """Fetch bytes from a node and cache them at the captured version."""
+        data = await self.node_client.read(
+            ctx,
+            record.node_id,
+            object_id,
+            record.owner_identity,
+        )
+        if self.cache is not None:
+            self.cache.put(object_id, version_before, data)
+        return data
 
     async def write(
         self,
@@ -296,16 +327,25 @@ class ObjectManager:
             if len(data) > record.size:
                 raise InvalidRequestError("data exceeds the allocated size")
 
-            await self._call_node(
-                self.node_client.write(
-                    ctx,
-                    record.node_id,
-                    object_id,
-                    record.owner_identity,
-                    bytes(data),
+            try:
+                await self._call_node(
+                    self.node_client.write(
+                        ctx,
+                        record.node_id,
+                        object_id,
+                        record.owner_identity,
+                        bytes(data),
+                    )
                 )
-            )
-            return self.directory.bump_version(object_id)
+            except BaseException:
+                if self.cache is not None:
+                    self.cache.invalidate(object_id)
+                raise
+
+            new_version = self.directory.bump_version(object_id)
+            if self.cache is not None:
+                self.cache.put(object_id, new_version, bytes(data))
+            return new_version
 
     async def free(
         self,
@@ -347,3 +387,5 @@ class ObjectManager:
                 )
 
             self.directory.remove(object_id)
+            if self.cache is not None:
+                self.cache.invalidate(object_id)
