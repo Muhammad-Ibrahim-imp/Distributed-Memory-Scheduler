@@ -17,10 +17,16 @@ class NodeClient(Protocol):
 
     # delete the object, silent no-op if it does not exist
     async def free(self, ctx, node_id, object_id, owner_identity) -> None: ...
-"""Object allocation and release operations for the DSM runtime."""
+"""Object allocation, access, mutation, and release for the DSM runtime.
 
+Writes to one object are serialized by that object's Directory lock; writes
+to different objects can run in parallel. A read after a completed write sees
+the new data, while a read concurrent with a write may see either value.
+"""
+
+import asyncio
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Awaitable, Protocol, TypeVar
 from uuid import uuid4
 
 from common.interfaces.NodeClient import NodeClient
@@ -29,11 +35,15 @@ from common.types.errors import (
     DSMTimeoutError,
     InvalidRequestError,
     NotOwnerError,
+    ObjectNotFoundError,
+    ObjectUnavailableError,
     OutOfCapacityError,
     QuotaExceededError,
 )
 from common.types.placement import PlacementDecision
 from dsm.directory.directory import Directory, ObjectRecord, ObjectState
+
+_NodeResult = TypeVar("_NodeResult")
 
 
 class Scheduler(Protocol):
@@ -77,6 +87,7 @@ class ObjectManager:
         scheduler: Scheduler,
         security: AccessChecker,
         config: ObjectManagerConfig = ObjectManagerConfig(),
+        node_timeout: float = 5.0,
     ) -> None:
         """Create an Object Manager with its runtime dependencies."""
         if (
@@ -85,12 +96,26 @@ class ObjectManager:
             or config.MAX_ALLOC_ATTEMPTS <= 0
         ):
             raise ValueError("MAX_ALLOC_ATTEMPTS must be a positive integer.")
+        if (
+            not isinstance(node_timeout, (int, float))
+            or isinstance(node_timeout, bool)
+            or node_timeout <= 0
+        ):
+            raise ValueError("node_timeout must be a positive number.")
 
         self.directory = directory
         self.node_client = node_client
         self.scheduler = scheduler
         self.security = security
         self.config = config
+        self.node_timeout = float(node_timeout)
+
+    async def _call_node(self, coro: Awaitable[_NodeResult]) -> _NodeResult:
+        """Run a node operation with a deadline and normalize timeout errors."""
+        try:
+            return await asyncio.wait_for(coro, timeout=self.node_timeout)
+        except asyncio.TimeoutError as exc:
+            raise DSMTimeoutError("Node operation timed out.") from exc
 
     async def alloc(
         self,
@@ -117,12 +142,14 @@ class ObjectManager:
                 raise InvalidRequestError(str(exc)) from exc
 
             try:
-                await self.node_client.alloc(
-                    ctx,
-                    decision.node_id,
-                    object_id,
-                    owner_identity,
-                    size,
+                await self._call_node(
+                    self.node_client.alloc(
+                        ctx,
+                        decision.node_id,
+                        object_id,
+                        owner_identity,
+                        size,
+                    )
                 )
             except OutOfCapacityError as exc:
                 last_error = exc
@@ -131,11 +158,13 @@ class ObjectManager:
                 raise
             except DSMTimeoutError as exc:
                 try:
-                    await self.node_client.free(
-                        ctx,
-                        decision.node_id,
-                        object_id,
-                        owner_identity,
+                    await self._call_node(
+                        self.node_client.free(
+                            ctx,
+                            decision.node_id,
+                            object_id,
+                            owner_identity,
+                        )
                     )
                 except Exception:
                     # A timed-out allocation may have reserved space; cleanup must not block retry.
@@ -158,6 +187,88 @@ class ObjectManager:
         if last_error is None:
             raise RuntimeError("Allocation attempts ended without a node result.")
         raise last_error
+
+    async def read(
+        self,
+        ctx: RequestContext,
+        caller_identity: str,
+        object_id: str,
+    ) -> bytes:
+        """Read an owned object; quarantined nodes remain readable."""
+        record = self.directory.get(object_id)
+        if record is None:
+            raise ObjectNotFoundError(object_id)
+
+        if not self.security.check_access(
+            caller_identity,
+            record.owner_identity,
+            "read",
+            object_id,
+        ):
+            raise NotOwnerError("caller is not the object owner")
+
+        if record.state is ObjectState.REVOKED:
+            raise ObjectUnavailableError("object is on a revoked node")
+
+        return await self._call_node(
+            self.node_client.read(
+                ctx,
+                record.node_id,
+                object_id,
+                record.owner_identity,
+            )
+        )
+
+    async def write(
+        self,
+        ctx: RequestContext,
+        caller_identity: str,
+        object_id: str,
+        data: bytes | bytearray,
+    ) -> int:
+        """Replace an object's bytes and return its next version.
+
+        After a timeout, the result is unknown: the node may or may not have
+        applied the write, but the Directory version is not incremented.
+        """
+        record = self.directory.get(object_id)
+        if record is None:
+            raise ObjectNotFoundError(object_id)
+
+        if not self.security.check_access(
+            caller_identity,
+            record.owner_identity,
+            "write",
+            object_id,
+        ):
+            raise NotOwnerError("caller is not the object owner")
+
+        if not isinstance(data, (bytes, bytearray)) or len(data) > record.size:
+            raise InvalidRequestError("data must be bytes within the allocated size")
+
+        lock = self.directory.get_lock(object_id)
+        if lock is None:
+            raise ObjectNotFoundError(object_id)
+
+        async with lock:
+            record = self.directory.get(object_id)
+            if record is None:
+                raise ObjectNotFoundError(object_id)
+            if record.state in (ObjectState.QUARANTINED, ObjectState.REVOKED):
+                raise ObjectUnavailableError("object is not writable in its current state")
+            if len(data) > record.size:
+                raise InvalidRequestError("data exceeds the allocated size")
+
+            await self._call_node(
+                self.node_client.write(
+                    ctx,
+                    record.node_id,
+                    object_id,
+                    record.owner_identity,
+                    bytes(data),
+                )
+            )
+            return self.directory.bump_version(object_id)
 
     async def free(
         self,
@@ -189,11 +300,13 @@ class ObjectManager:
 
             # Assumption pending M5 confirmation: an authorized free is allowed in every state.
             if record.state is not ObjectState.REVOKED:
-                await self.node_client.free(
-                    ctx,
-                    record.node_id,
-                    object_id,
-                    record.owner_identity,
+                await self._call_node(
+                    self.node_client.free(
+                        ctx,
+                        record.node_id,
+                        object_id,
+                        record.owner_identity,
+                    )
                 )
 
             self.directory.remove(object_id)

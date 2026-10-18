@@ -2,6 +2,8 @@
 # fake memory node used by A2 tests, mirrors the agreed node API
 # alloc / read / write / free, ctx is always the first argument
 
+import asyncio
+
 from common.types.errors import (
     TokenInvalidError,
     ObjectNotFoundError,
@@ -29,8 +31,21 @@ class FakeNodeClient:
         self.data: dict[str, bytes] = {}     # object_id -> stored bytes
         self.owners: dict[str, str] = {}     # object_id -> owner_identity
         self.fail_next_alloc: list[Exception] = []
+        self.fail_next_read: list[Exception] = []
+        self.fail_next_write: list[Exception] = []
         self.fail_next_free: list[Exception] = []
         self.call_log: list[tuple[str, tuple[object, ...]]] = []
+        self.call_delays: dict[str, float] = {}
+        self.active_write_calls = 0
+        self.max_concurrent_write_calls = 0
+        self.active_write_calls_by_object: dict[str, int] = {}
+        self.max_concurrent_write_calls_by_object: dict[str, int] = {}
+
+    async def _delay_call(self, call_name: str) -> None:
+        """Wait for a configured per-operation delay, when present."""
+        delay = self.call_delays.get(call_name, 0.0)
+        if delay > 0:
+            await asyncio.sleep(delay)
 
     async def alloc(
         self,
@@ -44,6 +59,7 @@ class FakeNodeClient:
         self.call_log.append(
             ("alloc", (ctx, node_id, object_id, owner_identity, size))
         )
+        await self._delay_call("alloc")
         if self.fail_next_alloc:
             raise self.fail_next_alloc.pop(0)
         # reject at alloc time if the node cannot fit it, nothing waits until first write
@@ -66,13 +82,35 @@ class FakeNodeClient:
         self.call_log.append(
             ("write", (ctx, node_id, object_id, owner_identity, data))
         )
-        # write does NOT create objects, only alloc does
-        if object_id not in self.data:
-            raise ObjectNotFoundError(object_id)
-        # data must fit in the space reserved at alloc
-        if len(data) > self.reserved[object_id]:
-            raise InvalidRequestError("data larger than allocated size")
-        self.data[object_id] = data      # full replace, no partial writes
+        self.active_write_calls += 1
+        self.max_concurrent_write_calls = max(
+            self.max_concurrent_write_calls,
+            self.active_write_calls,
+        )
+        active_for_object = self.active_write_calls_by_object.get(object_id, 0) + 1
+        self.active_write_calls_by_object[object_id] = active_for_object
+        self.max_concurrent_write_calls_by_object[object_id] = max(
+            self.max_concurrent_write_calls_by_object.get(object_id, 0),
+            active_for_object,
+        )
+        try:
+            await self._delay_call("write")
+            if self.fail_next_write:
+                raise self.fail_next_write.pop(0)
+            # write does NOT create objects, only alloc does
+            if object_id not in self.data:
+                raise ObjectNotFoundError(object_id)
+            # data must fit in the space reserved at alloc
+            if len(data) > self.reserved[object_id]:
+                raise InvalidRequestError("data larger than allocated size")
+            self.data[object_id] = bytes(data)  # full replace, no partial writes
+        finally:
+            self.active_write_calls -= 1
+            remaining_for_object = self.active_write_calls_by_object[object_id] - 1
+            if remaining_for_object:
+                self.active_write_calls_by_object[object_id] = remaining_for_object
+            else:
+                del self.active_write_calls_by_object[object_id]
 
     async def read(
         self,
@@ -85,6 +123,9 @@ class FakeNodeClient:
         self.call_log.append(
             ("read", (ctx, node_id, object_id, owner_identity))
         )
+        await self._delay_call("read")
+        if self.fail_next_read:
+            raise self.fail_next_read.pop(0)
         # never allocated or already freed
         if object_id not in self.data:
             raise ObjectNotFoundError(object_id)
@@ -101,6 +142,7 @@ class FakeNodeClient:
         self.call_log.append(
             ("free", (ctx, node_id, object_id, owner_identity))
         )
+        await self._delay_call("free")
         if self.fail_next_free:
             raise self.fail_next_free.pop(0)
         # free is idempotent, unknown or already freed id is a silent no-op
