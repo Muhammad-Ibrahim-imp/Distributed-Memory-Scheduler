@@ -3,6 +3,7 @@
 # alloc / read / write / free, ctx is always the first argument
 
 import asyncio
+from collections.abc import Callable
 
 from common.types.errors import (
     TokenInvalidError,
@@ -202,6 +203,7 @@ class FakeSecurity:
         self.trust_states = trust_states or {}
         self.events: list[SecurityEvent] = []
         self.access_checks: list[tuple[str, str, str, str]] = []
+        self.revocation_listeners: list[Callable[[str, float], list[str]]] = []
 
     def check_access(
         self,
@@ -215,6 +217,20 @@ class FakeSecurity:
             (identity, owner_identity, action, object_id)
         )
         return identity == owner_identity
+
+    def register_revocation_listener(
+        self,
+        callback: Callable[[str, float], list[str]],
+    ) -> None:
+        """Store a revocation callback registered by the runtime."""
+        self.revocation_listeners.append(callback)
+
+    def revoke_node(self, node_id: str, timestamp: float = 0.0) -> list[list[str]]:
+        """Fire registered callbacks for one revoked node."""
+        return [
+            callback(node_id, timestamp)
+            for callback in self.revocation_listeners
+        ]
 
     def get_trust_state(self, node_id: str) -> TrustState:
         return self.trust_states.get(node_id, TrustState.TRUSTED)

@@ -41,9 +41,18 @@ from common.types.errors import (
     QuotaExceededError,
 )
 from common.types.placement import PlacementDecision
+from common.types.security import TrustState
 from dsm.directory.directory import Directory, ObjectRecord, ObjectState
 
 _NodeResult = TypeVar("_NodeResult")
+
+# SUSPICIOUS currently preserves existing objects as ALLOCATED; confirm this with M5.
+TRUST_TO_OBJECT_STATE: dict[TrustState, ObjectState] = {
+    TrustState.TRUSTED: ObjectState.ALLOCATED,
+    TrustState.SUSPICIOUS: ObjectState.ALLOCATED,
+    TrustState.QUARANTINED: ObjectState.QUARANTINED,
+    TrustState.REVOKED: ObjectState.REVOKED,
+}
 
 
 class Scheduler(Protocol):
@@ -109,6 +118,7 @@ class ObjectManager:
         self.security = security
         self.config = config
         self.node_timeout = float(node_timeout)
+        self._revoked_node_ids: set[str] = set()
 
     async def _call_node(self, coro: Awaitable[_NodeResult]) -> _NodeResult:
         """Run a node operation with a deadline and normalize timeout errors."""
@@ -116,6 +126,30 @@ class ObjectManager:
             return await asyncio.wait_for(coro, timeout=self.node_timeout)
         except asyncio.TimeoutError as exc:
             raise DSMTimeoutError("Node operation timed out.") from exc
+
+    def handle_node_trust_state_changed(
+        self,
+        node_id: str,
+        trust_state: TrustState,
+        timestamp: float,
+    ) -> list[str]:
+        """Apply a node trust transition and return the affected object ids."""
+        del timestamp  # The Directory stores state, not transition timestamps.
+        object_state = TRUST_TO_OBJECT_STATE[trust_state]
+        if object_state is ObjectState.REVOKED:
+            self._revoked_node_ids.add(node_id)
+        elif node_id in self._revoked_node_ids:
+            return []
+
+        return self.directory.mark_node_state(node_id, object_state)
+
+    def handle_node_revoked(self, node_id: str, timestamp: float) -> list[str]:
+        """Handle M5's assumed revocation callback signature."""
+        return self.handle_node_trust_state_changed(
+            node_id,
+            TrustState.REVOKED,
+            timestamp,
+        )
 
     async def alloc(
         self,
@@ -182,6 +216,9 @@ class ObjectManager:
                     state=ObjectState.ALLOCATED,
                 )
             )
+            if decision.node_id in self._revoked_node_ids:
+                # A placement already in flight must not escape a completed revocation.
+                self.directory.mark_node_state(decision.node_id, ObjectState.REVOKED)
             return object_id
 
         if last_error is None:
