@@ -14,6 +14,17 @@ async def test_fake_node_roundtrip():
 def test_directory_put_get():
     # directory returns what we put in, and None for unknown ids
     d = Directory()
-    d.put(ObjectRecord(object_id="obj-1", owner="alice", size=5, node_id="node-1"))
-    assert d.get("obj-1").state == ObjectState.ALLOCATED
+    d.put(ObjectRecord(
+        object_id="obj-1",
+        owner_identity="alice",
+        size=5,
+        node_id="node-1",
+    ))
+    record = d.get("obj-1")
+    assert record is not None
+    assert record.owner_identity == "alice"
+    assert record.node_id == "node-1"
+    assert record.size == 5
+    assert record.version == 0
+    assert record.state == ObjectState.ALLOCATED
     assert d.get("nope") is None
