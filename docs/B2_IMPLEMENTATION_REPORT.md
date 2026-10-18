@@ -49,6 +49,45 @@ Approved differences from the original spec:
 | `configs/scheduler.json` | Default weights. | Policy `balanced` with weights 0.30, 0.20, 0.15, 0.15, 0.10, 0.10. |
 | `requirements.txt` | Graph dependency. | `matplotlib>=3.8`. |
 
+## Recommended reading order for B2
+
+Read the files in this order. The sequence starts with the shared data and provider contracts, follows one placement request through the scheduler, then covers scaling output and repository context. It includes every file in `scheduler/` and each shared file B2 directly uses or defines.
+
+1. `docs/B2_TEAM_SYNC.md` — Establish B2 ownership, provider integration, trust rules, units, and scaling inputs before reading implementation details.
+2. `common/types/security.py` — Read `TrustState`, which determines whether a node may receive a new placement.
+3. `common/types/resource.py` — Learn the A1 resource values B2 consumes: free RAM, CPU utilization, and health.
+4. `common/types/network.py` — Learn the B1 measurements B2 consumes: latency and bandwidth.
+5. `common/types/node.py` — See how resource, network, trust, and scheduler placement frequency are combined in `NodeStats`.
+6. `common/types/placement.py` — See the `PlacementDecision` returned to A2.
+7. `common/types/scheduler.py` — Understand policy selection and the weights used by balanced scoring.
+8. `common/interfaces/resource_state.py` — Read A1's provider contract for per-node resource measurements.
+9. `common/interfaces/network_state.py` — Read B1's provider contract for per-node network measurements.
+10. `common/interfaces/security_state.py` — Read M5's trust-state provider contract.
+11. `common/interfaces/node_state.py` — Read the interface used to supply aggregated node snapshots to the scheduler.
+12. `common/interfaces/scheduler.py` — Read the abstract scheduler API used when the caller already has node states; the state-loading helper is on `DefaultScheduler`, not this ABC.
+13. `scheduler/policies/base.py` — Learn the common interface implemented by each placement policy.
+14. `scheduler/policies/security.py` — Understand the hard eligibility rule: only `TrustState.TRUSTED` passes.
+15. `scheduler/policies/ram.py` — See the policy that chooses the eligible node with the most free RAM.
+16. `scheduler/policies/cpu.py` — See the policy that chooses the eligible node with the lowest CPU use.
+17. `scheduler/policies/latency.py` — See the policy that chooses the eligible node with the lowest latency.
+18. `scheduler/policies/bandwidth.py` — See the policy that chooses the eligible node with the highest bandwidth.
+19. `scheduler/scoring/node_scorer.py` — Follow normalization and weighted scoring for the balanced policy.
+20. `scheduler/policies/balanced.py` — See how `BalancedPolicy` uses `NodeScorer` to select and report a score.
+21. `scheduler/load_balancing/load_balancer.py` — Understand placement counts and how scheduler-side frequency is calculated.
+22. `scheduler/node_state.py` — Follow aggregation of A1, B1, and M5 provider results into `NodeStats`; provider errors propagate.
+23. `scheduler/scheduler.py` — Follow the full decision path: validate request, refresh trust, add scheduler load, filter by RAM and trust, apply policy, and return the decision.
+24. `scheduler/config.py` — See how the JSON scheduler settings become `SchedulerConfig`.
+25. `configs/scheduler.json` — Inspect the configured default policy and its six weights.
+26. `scheduler/factory.py` — See how config selects a policy and how providers are passed into `DefaultScheduler`.
+27. `scheduler/benchmark.py` — Understand `ScalingResult` inputs and the speedup and efficiency calculations.
+28. `scheduler/performance.py` — See how benchmark results produce the eight required graph files; this module visualizes supplied measurements and does not collect them.
+29. `requirements.txt` — Check the runtime and plotting dependencies, including Matplotlib.
+30. `README.md` — Review the overall system architecture and how the scheduler fits the DSM flow.
+31. `tests/` — Read the shared fixtures and component tests after understanding the contracts. The repository currently has no dedicated `tests/unit/test_scheduler.py`; tests in this tree primarily cover other implemented components and shared contracts.
+32. `docs/B2_IMPLEMENTATION_REPORT.md` — Return to this report for the implementation inventory, verification notes, and known integration limitations.
+
+Package marker files `common/__init__.py`, `common/interfaces/__init__.py`, `common/types/__init__.py`, `scheduler/__init__.py`, `scheduler/policies/__init__.py`, `scheduler/scoring/__init__.py`, and `scheduler/load_balancing/__init__.py` are intentionally empty; they make their directories importable Python packages and do not contain scheduler behavior.
+
 ## Commit history
 
 ```text
