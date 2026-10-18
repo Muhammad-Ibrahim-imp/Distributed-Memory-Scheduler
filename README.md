@@ -1535,3 +1535,9 @@ Memory Node
 ```
 
 The intended distribution is approximately balanced: **A1 gets additional node-level security, B1 gets transport security, B2 gets security-aware scheduling, while M5 retains the application adapters and central security/integration responsibilities.**
+
+
+## Development Setup
+Before running the coordinator or network tests, generate the local dev certificates:
+```cmd
+python scripts/gen_certs.py

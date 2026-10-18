@@ -1,36 +1,34 @@
 import asyncio
 import time
+import hashlib
+import ssl
 
 from common.protocol import dsm_pb2
-from common.types.errors import (
-    ObjectNotFoundError,
-    TokenExpiredError,
-    TokenInvalidError,
-)
+from common.types.errors import ObjectNotFoundError, TokenExpiredError, TokenInvalidError
+from common.types.context import RequestContext
 from common.types.security import EventType, Result, Severity, TrustState
-from network.security.rate_limit import RateLimiter
-from network.security.replay import ReplayGuard
-from network.security.tls import server_context
 from network.tcp.connection import Connection, DEFAULT_TIMEOUT
 from network.tcp.registry import NodeRegistry
+from network.security.rate_limit import RateLimiter
+from network.security.replay import ReplayGuard
 
 
 class CoordinatorServer:
-    def __init__(self, host, port, auth_service, registry=None, trust=None, audit=None):
+    def __init__(self, host, port, auth_service, runtime, registry=None, trust=None, audit=None):
         self.host, self.port = host, port
         self.auth_service = auth_service
+        self.runtime = runtime  # A2's runtime object
         self.registry = registry or NodeRegistry()
-        self.trust = trust      # M5's SecurityAPI (or fake)
-        self.audit = audit      # M5's AuditLogger (or None)
+        self.trust = trust
+        self.audit = audit
         self.replay = ReplayGuard()
         self.rate_limit = RateLimiter()
         self._server = None
         self._connections: dict[str, Connection] = {}
 
     async def start(self):
-        self._server = await asyncio.start_server(
-            self._accept, self.host, self.port, ssl=server_context()
-        )
+        from network.security.tls import server_context
+        self._server = await asyncio.start_server(self._accept, self.host, self.port, ssl=server_context())
         print(f"[coordinator] listening on {self.host}:{self.port}")
 
     async def stop(self):
@@ -48,22 +46,31 @@ class CoordinatorServer:
 
     async def _accept(self, reader, writer):
         conn = Connection(reader, writer)
-        conn.set_handler(lambda env, c=conn: self._handle(env, c))
+        # Extract cert fingerprint for M5
+        fingerprint = ""
+        ssl_obj = writer.get_extra_info('ssl_object')
+        if ssl_obj:
+            cert = ssl_obj.getpeercert(binary_form=True)
+            if cert:
+                fingerprint = hashlib.sha256(cert).hexdigest()
+        
+        conn.set_handler(lambda env, c=conn, f=fingerprint: self._handle(env, c, f))
         conn.start()
 
-    async def _handle(self, env, conn):
+    async def _handle(self, env, conn, cert_fingerprint):
         field = env.WhichOneof("payload")
 
         if field == "register":
-            await self._handle_register(env, conn)
+            await self._handle_register(env, conn, cert_fingerprint)
             return
-        if field == "refresh":
-            return  # Week 5
-
-        if field == "node_stats":
+        elif field == "refresh":
+            # Handled in Week 5, no-op for now
+            return
+        elif field == "node_stats":
             self.registry.set_stats(env.node_stats.node_id, env.node_stats)
             return
 
+        # Pipeline
         if not self._validate_envelope(env):
             await self._send_error(conn, env, "INVALID_REQUEST", "missing envelope fields")
             return
@@ -100,11 +107,44 @@ class CoordinatorServer:
             await self._send_error(conn, env, "RATE_LIMITED", "rate limited")
             return
 
-        await self._send_error(conn, env, "INVALID_REQUEST", "week 4 routing not wired yet")
+        # Route to A2
+        await self._route_to_runtime(env, conn)
 
-    async def _handle_register(self, env, conn):
+    async def _route_to_runtime(self, env, conn):
+        dsm = self.runtime.bind(env.identity)
+        rid = self._rid_of(env)
+        try:
+            if env.WhichOneof("payload") == "allocate":
+                obj_id = await dsm.alloc(env.allocate.size)
+                resp = dsm_pb2.Envelope()
+                resp.allocate_response.request_id = rid
+                resp.allocate_response.object_id = obj_id
+            elif env.WhichOneof("payload") == "read":
+                data = await dsm.read(env.read.object_id)
+                resp = dsm_pb2.Envelope()
+                resp.read_response.request_id = rid
+                resp.read_response.data = data
+            elif env.WhichOneof("payload") == "write":
+                await dsm.write(env.write.object_id, env.write.data)
+                resp = dsm_pb2.Envelope()
+                resp.write_response.request_id = rid
+            elif env.WhichOneof("payload") == "free":
+                await dsm.free(env.free.object_id)
+                resp = dsm_pb2.Envelope()
+                resp.free_response.request_id = rid
+            else:
+                return
+            await conn.send(resp)
+        except Exception as exc:
+            from network.tcp.errors import error_to_code
+            from common.types.errors import DSMError
+            code = error_to_code(exc) if isinstance(exc, DSMError) else "INVALID_REQUEST"
+            await self._send_error(conn, env, code, str(exc))
+
+    async def _handle_register(self, env, conn, cert_fingerprint):
         rid = env.register.request_id
         try:
+            # M5 noted register() will take cert_fingerprint later, passing for now
             result = self.auth_service.register(env.register.role, env.register.label, rid)
             resp = dsm_pb2.Envelope()
             resp.register_response.request_id = rid
@@ -115,11 +155,7 @@ class CoordinatorServer:
             if env.register.role == "node":
                 self.registry.register(result.identity, conn)
         except Exception as exc:
-            resp = dsm_pb2.Envelope()
-            resp.error.request_id = rid
-            resp.error.code = "INVALID_REQUEST"
-            resp.error.message = str(exc)
-            await conn.send(resp)
+            await self._send_error(conn, env, "INVALID_REQUEST", str(exc))
 
     def _validate_envelope(self, env) -> bool:
         return bool(env.identity and env.token and env.nonce and env.timestamp)
@@ -144,12 +180,8 @@ class CoordinatorServer:
             return
         try:
             self.audit.log_security_event(
-                EventType(event_type_name),
-                env.identity or "-",
-                Severity.WARNING,
-                Result(result),
-                self._rid_of(env) or "-",
-                **extra,
+                EventType(event_type_name), env.identity or "-",
+                Severity.WARNING, Result(result), self._rid_of(env) or "-", **extra
             )
         except Exception:
             pass

@@ -14,5 +14,5 @@ __pycache__/
 venv/
 
 data/
+logs/
 certs/
-

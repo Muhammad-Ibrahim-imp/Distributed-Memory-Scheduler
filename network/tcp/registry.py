@@ -12,6 +12,7 @@ class NodeEntry:
     last_seen: float
     last_stats: dsm_pb2.NodeStatsReport | None = None
     rtt_ms: float = 0.0
+    bandwidth_mbps: float = 100.0
 
 
 class NodeRegistry:
@@ -23,11 +24,11 @@ class NodeRegistry:
 
     def register(self, node_id: str, connection: Connection) -> None:
         was_known = node_id in self._ever_seen
+        self._ever_seen.add(node_id)
         self._nodes[node_id] = NodeEntry(node_id=node_id, connection=connection, last_seen=time.time())
         if was_known:
             for cb in self._listeners_up:
                 cb(node_id)
-        self._ever_seen.add(node_id)
 
     def unregister(self, node_id: str) -> None:
         if self._nodes.pop(node_id, None) is not None:
@@ -50,6 +51,11 @@ class NodeRegistry:
             entry.last_stats = stats
             entry.last_seen = time.time()
 
+    def set_bandwidth(self, node_id: str, bandwidth_mbps: float) -> None:
+        entry = self._nodes.get(node_id)
+        if entry is not None:
+            entry.bandwidth_mbps = bandwidth_mbps
+
     def list_ids(self) -> list[str]:
         return list(self._nodes.keys())
 
@@ -58,5 +64,3 @@ class NodeRegistry:
 
     def on_node_up(self, callback) -> None:
         self._listeners_up.append(callback)
-
-
