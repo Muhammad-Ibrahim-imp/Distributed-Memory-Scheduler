@@ -2,7 +2,7 @@
 
 ## Summary
 
-B2's scheduler is implemented on branch `B2/Scheduler`: placement policies, security filtering, load tracking, node-state aggregation, scaling math, and the eight performance graphs. Shared contracts live under `common/`. The scheduler does not measure resources, open sockets, or own trust transitions.
+B2's scheduler implementation includes placement policies, security filtering, load tracking, node-state aggregation, scaling math, and the eight performance graphs. Shared contracts live under `common/`. The scheduler does not measure resources, open sockets, or own trust transitions. This report describes the implementation present in the repository; the current checkout branch may differ.
 
 Approved differences from the original spec:
 
@@ -20,23 +20,23 @@ Approved differences from the original spec:
 | `common/__init__.py` | Makes `common` a package. | Empty file. |
 | `common/interfaces/__init__.py` | Makes `common.interfaces` a package. | Empty file. |
 | `scheduler/__init__.py` | Makes `scheduler` a package. | Empty file. |
-| `common/types/security.py` | Trust states B2 consumes. | `SecurityState` enum: `TRUSTED`, `SUSPICIOUS`, `QUARANTINED`, `REVOKED`, with lowercase string values. |
+| `common/types/security.py` | Trust states B2 consumes. | `TrustState` enum: `TRUSTED`, `SUSPICIOUS`, `QUARANTINED`, `REVOKED`. M5's `TrustStateReader` returns this enum. |
 | `common/types/resource.py` | A1 resource contract. | `ResourceStats` (`free_ram` bytes, `cpu_usage` 0–100, `health` 0.0–1.0). `__post_init__` raises `ValueError` outside those ranges. |
 | `common/types/network.py` | B1 network contract. | `NetworkStats` (`latency` ms, `bandwidth` Mbps). Negative values raise `ValueError`. |
-| `common/types/node.py` | Merged node state used by the scheduler. | `NodeStats` plus `access_frequency` (0.0–1.0), which B2 fills with its own placement frequency. `security_state` must be a `SecurityState` or construction raises `TypeError`. |
+| `common/types/node.py` | Merged node state used by the scheduler. | `NodeStats` plus `access_frequency` (0.0–1.0), which B2 fills with its own placement frequency. `security_state` must be a `TrustState` or construction raises `TypeError`. |
 | `common/types/placement.py` | Decision returned to A2. | `PlacementDecision(object_id, node_id, score=None)`. |
 | `common/types/scheduler.py` | Policy name and scoring weights. | `SchedulerConfig`, default policy `balanced`. Negative weights, or a weight sum of zero or less, raise `ValueError`. |
 | `common/interfaces/scheduler.py` | API A2 depends on for an explicit node list. | Abstract `Scheduler.select_node`. `select_node_from_state` is not on this ABC. |
 | `common/interfaces/node_state.py` | How the scheduler pulls current nodes. | Abstract `NodeStateProvider.get_nodes`. |
 | `common/interfaces/resource_state.py` | A1 provider. | Abstract `ResourceStateProvider.get_resource_state(node_id)`. |
 | `common/interfaces/network_state.py` | B1 provider. | Abstract `NetworkStateProvider.get_network_state(node_id)`. |
-| `common/interfaces/security_state.py` | M5 provider. | Abstract `SecurityStateProvider.get_trust_state(node_id) -> SecurityState`. |
+| `common/interfaces/security_state.py` | M5 provider. | Abstract `SecurityStateProvider.get_trust_state(node_id) -> TrustState`. |
 | `scheduler/policies/base.py` | Policy interface. | Abstract `PlacementPolicy.select`. |
 | `scheduler/policies/ram.py` | Free-RAM placement. | `RAMAwarePolicy` picks the maximum `free_ram`. |
 | `scheduler/policies/cpu.py` | CPU placement. | `CPUAwarePolicy` picks the minimum `cpu_usage`. |
 | `scheduler/policies/latency.py` | Latency placement. | `LatencyAwarePolicy` picks the minimum `latency`. |
 | `scheduler/policies/bandwidth.py` | Bandwidth placement. | `BandwidthAwarePolicy` picks the maximum `bandwidth`. |
-| `scheduler/policies/security.py` | Security filter. | `SecurityPolicy.is_allowed` is true only when `security_state is SecurityState.TRUSTED`. |
+| `scheduler/policies/security.py` | Security filter. | `SecurityPolicy.is_allowed` is true only when `security_state is TrustState.TRUSTED`. |
 | `scheduler/scoring/node_scorer.py` | Balanced score. | Min-max normalization. Higher is better for RAM and bandwidth. Lower is better for CPU, latency, and placement frequency. Health is used as the raw 0.0–1.0 value. The weighted sum is divided by the total weight. |
 | `scheduler/policies/balanced.py` | Weighted placement. | `BalancedPolicy` selects the highest `NodeScorer` score and exposes `score`. |
 | `scheduler/load_balancing/load_balancer.py` | Placement counts. | `LoadBalancer` counts assignments per node. Frequencies are count divided by the total for the nodes in the current decision. This is not application access frequency. |
