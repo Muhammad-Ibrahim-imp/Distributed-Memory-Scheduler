@@ -1,7 +1,10 @@
 """In-memory fake of the DSM API for adapter tests.
 
-Follows the semantics agreed with A2: async methods, UUID4 string ids created
-inside alloc(), free() is idempotent, errors from common/types/errors.py.
+Follows common/interfaces/dsm_api.py:
+  * alloc(size) reserves `size` zero bytes; an unwritten object reads as zeros.
+  * write() may be SHORTER than the object (the rest keeps its old bytes) but
+    never longer (InvalidRequestError).
+  * free() is idempotent.
 
 Test helpers:
     calls      list of ("alloc", size) / ("read", oid) / ("write", oid) / ("free", oid)
@@ -37,10 +40,10 @@ class MockDSMAPI:
     async def alloc(self, size: int) -> str:
         self.calls.append(("alloc", size))
         self._maybe_fail("alloc", None)
-        if not isinstance(size, int) or size <= 0:
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
             raise InvalidRequestError(f"bad size: {size!r}")
         oid = str(uuid.uuid4())
-        self._store[oid] = b""
+        self._store[oid] = bytes(size)
         return oid
 
     async def read(self, object_id: str) -> bytes:
@@ -55,7 +58,12 @@ class MockDSMAPI:
         self._maybe_fail("write", object_id)
         if object_id not in self._store:
             raise ObjectNotFoundError(object_id)
-        self._store[object_id] = data
+        current = self._store[object_id]
+        if len(data) > len(current):
+            raise InvalidRequestError(
+                f"write of {len(data)} bytes exceeds object size {len(current)}"
+            )
+        self._store[object_id] = bytes(data) + current[len(data):]
 
     async def free(self, object_id: str) -> None:
         self.calls.append(("free", object_id))
