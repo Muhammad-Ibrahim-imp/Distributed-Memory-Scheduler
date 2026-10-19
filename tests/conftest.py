@@ -47,5 +47,5 @@ def core(tmp_path, clock, trust):
 
 
 @pytest.fixture
-def dsm():
+def dsm() -> MockDSMAPI:
     return MockDSMAPI()
