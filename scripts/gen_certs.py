@@ -3,7 +3,7 @@ Server SAN covers 'coordinator' (Docker service name), 'localhost', 127.0.0.1.
 Run from project root: python scripts/gen_certs.py
 """
 import ipaddress
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from cryptography import x509
