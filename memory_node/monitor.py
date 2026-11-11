@@ -32,6 +32,55 @@ def read_container_memory(cgroup_root: Path = DEFAULT_CGROUP_ROOT) -> tuple[int,
             return None
         return limit, usage
     return None
+def effective_memory(cgroup_root: Path = DEFAULT_CGROUP_ROOT) -> tuple[int, int]:
+    """(total, available) this process can really use: the container's limit when
+    there is one below host RAM, otherwise host RAM (B2)."""
+    vm = psutil.virtual_memory()
+    container = read_container_memory(cgroup_root)
+    if container is not None:
+        limit, usage = container
+        if limit < vm.total:
+            return limit, max(0, limit - usage)
+    return vm.total, vm.available
+
+
+DEFAULT_HEADROOM_FRACTION = 0.10
+DEFAULT_HEADROOM_MIN_BYTES = 128 * 1024 * 1024    # 128 MiB
+
+
+@dataclass(frozen=True)
+class PoolPlan:
+    configured: int       # NODE_CAPACITY_BYTES as given
+    effective_limit: int  # the memory this process can use in total
+    headroom: int         # bytes kept back for Python, copies and the OS
+    pool: int             # what the node actually offers
+
+    @property
+    def clamped(self) -> bool:
+        return self.pool < self.configured
+
+
+def plan_pool_capacity(configured: int, effective_limit: int,
+                       headroom_fraction: float = DEFAULT_HEADROOM_FRACTION,
+                       headroom_min_bytes: int = DEFAULT_HEADROOM_MIN_BYTES) -> PoolPlan:
+    """pool = min(configured, effective_limit - headroom), where headroom is
+    max(headroom_min_bytes, headroom_fraction * effective_limit) (B2).
+    Raises ValueError if nothing usable is left, so startup is refused."""
+    if configured <= 0:
+        raise ValueError("configured capacity must be positive")
+    if effective_limit <= 0:
+        raise ValueError("effective memory limit must be positive")
+    if not 0 <= headroom_fraction < 1:
+        raise ValueError("headroom_fraction must be in [0, 1)")
+    if headroom_min_bytes < 0:
+        raise ValueError("headroom_min_bytes must not be negative")
+    headroom = max(headroom_min_bytes, int(effective_limit * headroom_fraction))
+    usable = effective_limit - headroom
+    if usable <= 0:
+        raise ValueError(
+            f"no usable pool capacity: an effective limit of {effective_limit} bytes "
+            f"leaves nothing after {headroom} bytes of headroom")
+    return PoolPlan(configured, effective_limit, headroom, min(configured, usable))
 
 
 @dataclass
@@ -94,15 +143,7 @@ class NodeResourceMonitor:    # if a shared ResourceStateProvider exists, subcla
         )
 
     def effective_memory(self) -> tuple[int, int]:
-        """(total, available) this process can really use: the container's limit when
-        there is one below host RAM, otherwise host RAM (B2)."""
-        vm = psutil.virtual_memory()
-        container = read_container_memory(self._cgroup_root)
-        if container is not None:
-            limit, usage = container
-            if limit < vm.total:
-                return limit, max(0, limit - usage)
-        return vm.total, vm.available
+        return effective_memory(self._cgroup_root)
 
     def _check_node_id(self, node_id: str) -> None:
         if node_id != self.node_id:

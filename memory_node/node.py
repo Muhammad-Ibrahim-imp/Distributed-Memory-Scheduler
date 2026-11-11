@@ -1,6 +1,8 @@
+
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from memory_node.allocator.allocator import Allocator
 from memory_node.storage.storage import ObjectStore
@@ -10,7 +12,16 @@ from memory_node.security.quotas import QuotaTracker
 from memory_node.security.integrity import compute_sha256, verify_integrity
 from memory_node.security.secure_delete import SecureDeleter
 from memory_node.security.audit import SecurityAuditReporter
-from memory_node.monitor import NodeResourceMonitor, CapacityStats, NodeReport
+from memory_node.monitor import (
+    NodeResourceMonitor,
+    CapacityStats,
+    NodeReport,
+    effective_memory,
+    plan_pool_capacity,
+    DEFAULT_CGROUP_ROOT,
+    DEFAULT_HEADROOM_FRACTION,
+    DEFAULT_HEADROOM_MIN_BYTES,
+)
 
 from common.types.errors import (
     NotOwnerError, ObjectUnavailableError, OutOfCapacityError,
@@ -20,7 +31,9 @@ from common.types.resource import ResourceStats
 from common.types.context import RequestContext
 from typing import Callable
 from common.types.security import SecurityEvent
+
 logger = logging.getLogger(__name__)
+
 
 class MemoryNode:
     """A1 Node API. Signatures are frozen per B1's spec.
@@ -38,33 +51,43 @@ class MemoryNode:
     def __init__(self, node_id: str, total_capacity_bytes: int,
                  max_memory_fraction_per_client: float = 0.5,
                  max_objects_per_client: int | None = 10_000,
-                 event_sink: Callable[[SecurityEvent], None] | None = None):
-
+                 event_sink: Callable[[SecurityEvent], None] | None = None,
+                 headroom_fraction: float = DEFAULT_HEADROOM_FRACTION,
+                 headroom_min_bytes: int = DEFAULT_HEADROOM_MIN_BYTES,
+                 cgroup_root: Path = DEFAULT_CGROUP_ROOT):
+        """total_capacity_bytes is the CONFIGURED capacity (B1's NODE_CAPACITY_BYTES).
+        The pool the node really offers is clamped to the memory this process can use
+        minus headroom (B2), and startup is refused with ValueError if nothing usable
+        is left. cgroup_root is a test hook."""
         self.node_id = node_id
-        self.allocator = Allocator(total_capacity_bytes)
+
+        effective_total, _ = effective_memory(cgroup_root)
+        self.pool_plan = plan_pool_capacity(
+            total_capacity_bytes, effective_total, headroom_fraction, headroom_min_bytes)
+        plan = self.pool_plan
+        logger.log(
+            logging.WARNING if plan.clamped else logging.INFO,
+            "pool sizing: configured=%d effective_limit=%d headroom=%d pool=%d%s",
+            plan.configured, plan.effective_limit, plan.headroom, plan.pool,
+            " (clamped)" if plan.clamped else "")
+        pool = plan.pool
+
+        self.allocator = Allocator(pool)
         self.storage = ObjectStore()
         self.metadata = MetadataStore()
         self.isolation = IsolationChecker()
-        # Defaults mirror configs/security.yaml (M5). B1's node_main.py should pass
-        # the real values from that file. The capacity experiment overrides them.
+        # Defaults mirror configs/security.yaml (M5). The fraction applies to the pool
+        # the node actually offers [ASSUMED, asked M5]. B1's node_main.py should pass
+        # the real values. The capacity experiment overrides them.
         self.quotas = QuotaTracker.from_fraction(
-            total_capacity_bytes, max_memory_fraction_per_client,
-            max_objects_per_client)
+            pool, max_memory_fraction_per_client, max_objects_per_client)
         self.secure_deleter = SecureDeleter()
-        self.monitor = NodeResourceMonitor(node_id, self.allocator)
+        self.monitor = NodeResourceMonitor(node_id, self.allocator, cgroup_root)
         self.audit = SecurityAuditReporter(node_id, event_sink)
-
-        effective_total, _ = self.monitor.effective_memory()
-        if total_capacity_bytes > effective_total:
-            logger.warning(
-                "pool capacity %d bytes exceeds the %d bytes this process can use "
-                "(container limit or host RAM); free_ram would overstate what can "
-                "really be allocated", total_capacity_bytes, effective_total)
 
         self._object_locks: dict[str, asyncio.Lock] = {}
         # Objects blocked by migration or degraded storage. Nothing sets this yet.
         self._unavailable: set[str] = set()
-
     # ---- helpers ----
     @staticmethod
     def _require_text(value, name: str) -> None:

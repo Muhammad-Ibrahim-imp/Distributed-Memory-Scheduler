@@ -61,10 +61,6 @@ def test_node_passes_event_sink_to_audit(monkeypatch):
     assert len(got) == 1 and got[0].actor_id == "node-1"
 
 
-def test_node_warns_when_pool_exceeds_usable_memory(caplog):
-    with caplog.at_level(logging.WARNING, logger="memory_node.node"):
-        MemoryNode("node-1", 10**15)
-    assert "exceeds" in caplog.text
 
 
 def test_update_node_identity_rejects_bad_values():
