@@ -1,7 +1,11 @@
 import asyncio
 
 from memory_node.node import MemoryNode
+import logging
 
+import pytest
+
+from common.types.errors import InvalidRequestError
 
 def make_node():
     return MemoryNode("node-1", 10_000)
@@ -47,3 +51,25 @@ def test_node_get_node_report():
     assert r.available_memory == 10_000
     assert r.object_count == 0
     assert 0.0 <= r.health <= 1.0
+
+def test_node_passes_event_sink_to_audit(monkeypatch):
+    import security.monitoring.audit as m5_audit
+    monkeypatch.setattr(m5_audit, "log_security_event", lambda *a, **k: None)
+    got = []
+    node = MemoryNode("node-1", 10_000, event_sink=got.append)
+    node.audit.report_secure_delete_failed("obj-1", "req-1")
+    assert len(got) == 1 and got[0].actor_id == "node-1"
+
+
+def test_node_warns_when_pool_exceeds_usable_memory(caplog):
+    with caplog.at_level(logging.WARNING, logger="memory_node.node"):
+        MemoryNode("node-1", 10**15)
+    assert "exceeds" in caplog.text
+
+
+def test_update_node_identity_rejects_bad_values():
+    node = make_node()
+    for bad in ("", None, 5):
+        with pytest.raises(InvalidRequestError):
+            node.update_node_identity(bad)
+    assert node.node_id == "node-1"
