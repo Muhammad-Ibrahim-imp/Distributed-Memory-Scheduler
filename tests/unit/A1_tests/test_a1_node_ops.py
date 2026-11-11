@@ -447,3 +447,17 @@ async def test_report_and_resource_state_follow_operations():
     await node.free(ctx(), "o1", "alice")
     r = await node.get_node_report()
     assert (r.used_memory, r.available_memory, r.object_count) == (0, 1000, 0)
+
+@run_async
+async def test_identity_update_is_used_in_reports_and_events():
+    node, events = make_node()
+    node.update_node_identity("node-2")
+    assert (await node.get_node_report()).node_id == "node-2"
+    assert (await node.get_resource_state("node-2")).free_ram == 10_000
+    with pytest.raises(ValueError):
+        await node.get_resource_state("node-1")
+    await node.alloc(ctx(), "o1", "alice", 10)
+    await node.write(ctx(), "o1", "alice", b"x")
+    node.secure_deleter.wipe = lambda buf: False
+    await node.free(ctx(), "o1", "alice")
+    assert events[0].actor_id == "node-2"

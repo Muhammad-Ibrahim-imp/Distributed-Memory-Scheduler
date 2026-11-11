@@ -98,3 +98,38 @@ def test_delivery_failure_falls_back_to_local_log(monkeypatch, caplog):
     with caplog.at_level(logging.INFO, logger="memory_node.audit"):
         SecurityAuditReporter("node-1").report_secure_delete_failed("obj-1", "req-9")
     assert "secure_delete_failed" in caplog.text
+def test_event_sink_receives_every_event(monkeypatch):
+    import security.monitoring.audit as m5_audit
+    monkeypatch.setattr(m5_audit, "log_security_event", lambda *a, **k: None)
+    got = []
+    r = SecurityAuditReporter("node-1", event_sink=got.append)
+    r.report_secure_delete_failed("obj-1", "req-1", "alice")
+    assert [e.event_type for e in got] == [EventType.SECURE_DELETE_FAILED]
+    assert got[0].actor_id == "node-1"
+
+
+def test_sink_failure_does_not_stop_local_delivery(monkeypatch):
+    import security.monitoring.audit as m5_audit
+    calls = []
+    monkeypatch.setattr(m5_audit, "log_security_event",
+                        lambda *a, **k: calls.append(a))
+
+    def bad_sink(event):
+        raise RuntimeError("sink down")
+
+    SecurityAuditReporter("node-1", event_sink=bad_sink).report_secure_delete_failed(
+        "obj-1", "req-1")
+    assert len(calls) == 1
+
+
+def test_local_failure_does_not_stop_the_sink(monkeypatch):
+    import security.monitoring.audit as m5_audit
+
+    def boom(*a, **k):
+        raise RuntimeError("audit logger not configured")
+
+    monkeypatch.setattr(m5_audit, "log_security_event", boom)
+    got = []
+    SecurityAuditReporter("node-1", event_sink=got.append).report_secure_delete_failed(
+        "obj-1", "req-1")
+    assert len(got) == 1

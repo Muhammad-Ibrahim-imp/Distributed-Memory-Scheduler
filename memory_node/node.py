@@ -18,7 +18,8 @@ from common.types.errors import (
 )
 from common.types.resource import ResourceStats
 from common.types.context import RequestContext
-
+from typing import Callable
+from common.types.security import SecurityEvent
 logger = logging.getLogger(__name__)
 
 class MemoryNode:
@@ -36,7 +37,9 @@ class MemoryNode:
 
     def __init__(self, node_id: str, total_capacity_bytes: int,
                  max_memory_fraction_per_client: float = 0.5,
-                 max_objects_per_client: int | None = 10_000):
+                 max_objects_per_client: int | None = 10_000,
+                 event_sink: Callable[[SecurityEvent], None] | None = None):
+
         self.node_id = node_id
         self.allocator = Allocator(total_capacity_bytes)
         self.storage = ObjectStore()
@@ -49,7 +52,14 @@ class MemoryNode:
             max_objects_per_client)
         self.secure_deleter = SecureDeleter()
         self.monitor = NodeResourceMonitor(node_id, self.allocator)
-        self.audit = SecurityAuditReporter(node_id)
+        self.audit = SecurityAuditReporter(node_id, event_sink)
+
+        effective_total, _ = self.monitor.effective_memory()
+        if total_capacity_bytes > effective_total:
+            logger.warning(
+                "pool capacity %d bytes exceeds the %d bytes this process can use "
+                "(container limit or host RAM); free_ram would overstate what can "
+                "really be allocated", total_capacity_bytes, effective_total)
 
         self._object_locks: dict[str, asyncio.Lock] = {}
         # Objects blocked by migration or degraded storage. Nothing sets this yet.
@@ -97,6 +107,16 @@ class MemoryNode:
         if not ok:
             self._report(self.audit.report_secure_delete_failed, object_id,
                          ctx.request_id, owner_identity)
+
+    def update_node_identity(self, new_id: str) -> None:
+        """Called by B1's NodeService after registration or re-registration (M5):
+        every registration issues a fresh identity while the node keeps running with
+        its objects. Synchronous on purpose: do NOT await it. Updates the identity used
+        for event actor_id, heartbeat reports and resource-state checks."""
+        self._require_text(new_id, "node identity")
+        self.node_id = new_id
+        self.monitor.node_id = new_id
+        self.audit.node_id = new_id
 
     # ---- Called by B1 on behalf of A2 (frozen) ----
     async def alloc(self, ctx: RequestContext, object_id: str,
