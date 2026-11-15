@@ -54,6 +54,19 @@ def test_bump_version_unknown_raises():
         d.bump_version("missing")
 
 
+def test_consistency_manager_tracks_version_and_drops_lock_on_remove():
+    d = Directory()
+    d.put(make_record())
+
+    lock = d.get_lock("obj1")
+    assert lock is not None
+    assert d.bump_version("obj1") == 1
+    assert d.get("obj1").version == 1
+
+    d.remove("obj1")
+    assert d.get_lock("obj1") is None
+
+
 def test_mark_node_state_only_hits_that_node():
     d = Directory()
     d.put(make_record("obj1", "nodeA"))

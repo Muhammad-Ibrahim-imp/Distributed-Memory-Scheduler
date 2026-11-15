@@ -66,6 +66,7 @@ async def test_alloc_stores_record_and_passes_scheduler_arguments() -> None:
     assert scheduler.calls == [{"object_id": object_id, "object_size": 64}]
     assert UUID(object_id).version == 4
     assert object_id in node.data
+    assert await manager.read(make_context(), "alice", object_id) == b""
 
 
 async def test_alloc_retries_on_node_capacity_and_uses_next_node() -> None:
