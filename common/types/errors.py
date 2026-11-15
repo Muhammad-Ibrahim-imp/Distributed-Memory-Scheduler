@@ -35,15 +35,12 @@ class OutOfCapacityError(DSMError):
 
 
 class QuotaExceededError(DSMError):
-    """The caller's own quota is exhausted (policy §5:
-    max_memory_fraction_per_client or max_objects_per_client). Raised by A1 at
-    node level.
+    """The caller exceeded its quota on the selected memory node.
 
-    Distinct from OutOfCapacityError, deliberately: that one means the cluster
-    is full and nobody could allocate here; this one means the cluster has room
-    but *this* client is not allowed to use more of it. Conflating them sends
-    the reader looking at cluster-wide free RAM when the real answer is one
-    client's cap. Retrying will not help until the client frees something."""
+    Distinct from OutOfCapacityError, which means the selected node lacks
+    cluster capacity. Another node may still have quota available for this
+    caller, so the Object Manager can retry placement elsewhere.
+    """
 
 
 class InvalidRequestError(DSMError):

@@ -104,16 +104,42 @@ async def test_alloc_raises_last_capacity_error_and_keeps_directory_unchanged() 
     assert len(scheduler.calls) == 3
 
 
-async def test_alloc_does_not_retry_quota_exceeded() -> None:
-    """Quota is client-wide and therefore fails without trying another node."""
+async def test_alloc_retries_node_quota_and_uses_next_node() -> None:
+    """A quota rejection retries placement with the same id on another node."""
     manager, _, node, scheduler, _ = make_manager(["node-1", "node-2"])
     node.fail_next_alloc.append(QuotaExceededError("quota reached"))
 
-    with pytest.raises(QuotaExceededError, match="quota reached"):
+    object_id = await manager.alloc(make_context(), "alice", 64)
+
+    assert len(scheduler.calls) == 2
+    assert {call["object_id"] for call in scheduler.calls} == {object_id}
+    assert [call[1][1] for call in node.call_log if call[0] == "alloc"] == [
+        "node-1",
+        "node-2",
+    ]
+
+
+async def test_alloc_raises_last_node_quota_error_after_retries() -> None:
+    """Exhausted quota retries do not create Directory metadata."""
+    manager, directory, node, scheduler, _ = make_manager(
+        ["node-1", "node-2", "node-3"]
+    )
+    node.fail_next_alloc.extend(
+        [
+            QuotaExceededError("quota-1"),
+            QuotaExceededError("quota-2"),
+            QuotaExceededError("quota-3"),
+        ]
+    )
+
+    with pytest.raises(QuotaExceededError, match="quota-3"):
         await manager.alloc(make_context(), "alice", 64)
 
-    assert len(scheduler.calls) == 1
-    assert len([call for call in node.call_log if call[0] == "alloc"]) == 1
+    assert len(scheduler.calls) == 3
+    assert all(
+        directory.get(call["object_id"]) is None
+        for call in scheduler.calls
+    )
 
 
 async def test_alloc_maps_scheduler_runtime_and_value_errors() -> None:
@@ -131,6 +157,7 @@ async def test_alloc_maps_scheduler_runtime_and_value_errors() -> None:
             self,
             object_id: str,
             object_size: int,
+            excluded_node_ids: set[str] | None = None,
         ) -> NoReturn:
             """Raise the invalid-placement error."""
             raise ValueError("invalid placement")
@@ -152,6 +179,7 @@ async def test_alloc_propagates_unexpected_scheduler_errors_unchanged() -> None:
             self,
             object_id: str,
             object_size: int,
+            excluded_node_ids: set[str] | None = None,
         ) -> NoReturn:
             """Raise the configured backend error instance."""
             raise expected_error
@@ -164,10 +192,9 @@ async def test_alloc_propagates_unexpected_scheduler_errors_unchanged() -> None:
 
 
 async def test_alloc_cleans_up_after_timeout_then_retries() -> None:
-    """Timeout cleanup is best effort and the next placement can succeed."""
+    """A timed-out allocation retries only after cleanup succeeds."""
     manager, directory, node, scheduler, _ = make_manager(["node-1", "node-2"])
     node.fail_next_alloc.append(DSMTimeoutError("allocation timed out"))
-    node.fail_next_free.append(RuntimeError("cleanup failed"))
 
     object_id = await manager.alloc(make_context(), "alice", 64)
 
@@ -175,6 +202,23 @@ async def test_alloc_cleans_up_after_timeout_then_retries() -> None:
     assert [call[0] for call in node.call_log] == ["alloc", "free", "alloc"]
     assert node.call_log[1][1][1] == "node-1"
     assert len(scheduler.calls) == 2
+
+
+async def test_alloc_surfaces_timeout_cleanup_failure_without_retry() -> None:
+    """Failed orphan cleanup stops retries and leaves Directory unchanged."""
+    manager, directory, node, scheduler, _ = make_manager(["node-1", "node-2"])
+    node.fail_next_alloc.append(DSMTimeoutError("allocation timed out"))
+    node.fail_next_free.append(RuntimeError("cleanup failed"))
+
+    with pytest.raises(RuntimeError, match="cleanup failed"):
+        await manager.alloc(make_context(), "alice", 64)
+
+    assert len(scheduler.calls) == 1
+    assert [call[0] for call in node.call_log] == ["alloc", "free"]
+    assert all(
+        directory.get(call["object_id"]) is None
+        for call in scheduler.calls
+    )
 
 
 @pytest.mark.parametrize("size", [0, -1, "4", 1.5, True])

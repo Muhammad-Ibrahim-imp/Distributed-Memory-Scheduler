@@ -179,18 +179,17 @@ class FakeScheduler:
         self,
         object_id: str,
         object_size: int,
+        excluded_node_ids: set[str] | None = None,
     ) -> PlacementDecision:
         """Return and consume the next configured placement target."""
         self.calls.append(
             {"object_id": object_id, "object_size": object_size}
         )
-        if not self.node_ids:
-            raise RuntimeError("No eligible node available for placement.")
-
-        return PlacementDecision(
-            object_id=object_id,
-            node_id=self.node_ids.pop(0),
-        )
+        while self.node_ids:
+            node_id = self.node_ids.pop(0)
+            if excluded_node_ids is None or node_id not in excluded_node_ids:
+                return PlacementDecision(object_id=object_id, node_id=node_id)
+        raise RuntimeError("No eligible node available for placement.")
 
 
 class FakeSecurity:

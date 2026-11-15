@@ -1,6 +1,7 @@
 """Unit coverage for Object Manager trust-state transitions."""
 
 from common.types.security import TrustState
+from dsm.cache import ObjectCache
 from dsm.directory.directory import Directory, ObjectRecord, ObjectState
 from dsm.object_manager import ObjectManager, ObjectManagerConfig
 from tests.mocks.fakes import FakeNodeClient, FakeScheduler, FakeSecurity
@@ -53,3 +54,29 @@ def test_suspicious_state_preserves_allocated_objects() -> None:
         1.0,
     ) == ["obj-1"]
     assert directory.get("obj-1").state is ObjectState.ALLOCATED
+
+
+def test_node_failure_marks_objects_unavailable_and_invalidates_cache() -> None:
+    directory = Directory()
+    directory.put(
+        ObjectRecord(
+            object_id="obj-1",
+            owner_identity="alice",
+            size=8,
+            node_id="node-1",
+        )
+    )
+    cache = ObjectCache()
+    cache.put("obj-1", 0, b"data")
+    manager = ObjectManager(
+        directory,
+        FakeNodeClient(),
+        FakeScheduler(),
+        FakeSecurity(),
+        ObjectManagerConfig(),
+        cache=cache,
+    )
+
+    assert manager.handle_node_failure("node-1") == ["obj-1"]
+    assert directory.get("obj-1").state is ObjectState.UNAVAILABLE
+    assert cache.get("obj-1") is None

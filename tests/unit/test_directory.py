@@ -67,6 +67,35 @@ def test_consistency_manager_tracks_version_and_drops_lock_on_remove():
     assert d.get_lock("obj1") is None
 
 
+def test_is_current_rejects_stale_and_forgotten_versions():
+    d = Directory()
+    d.put(make_record())
+
+    assert d.is_current("obj1", 0)
+    assert d.bump_version("obj1") == 1
+    assert not d.is_current("obj1", 0)
+    assert d.is_current("obj1", 1)
+
+    d.remove("obj1")
+    assert not d.is_current("obj1", 1)
+
+
+async def test_update_location_waits_for_the_object_lock():
+    d = Directory()
+    d.put(make_record())
+    lock = d.get_lock("obj1")
+    assert lock is not None
+    await lock.acquire()
+    update = asyncio.create_task(d.update_location("obj1", "nodeB"))
+
+    await asyncio.sleep(0)
+    assert d.get("obj1").node_id == "nodeA"
+
+    lock.release()
+    await update
+    assert d.get("obj1").node_id == "nodeB"
+
+
 def test_mark_node_state_only_hits_that_node():
     d = Directory()
     d.put(make_record("obj1", "nodeA"))
@@ -75,6 +104,17 @@ def test_mark_node_state_only_hits_that_node():
     assert affected == ["obj1"]                                # only nodeA objects
     assert d.get("obj1").state == ObjectState.REVOKED
     assert d.get("obj2").state == ObjectState.ALLOCATED        # nodeB untouched
+
+
+def test_mark_node_failed_preserves_revoked_state():
+    d = Directory()
+    d.put(make_record("obj1", "nodeA"))
+    d.put(make_record("obj2", "nodeA"))
+    d.get("obj2").state = ObjectState.REVOKED
+
+    assert d.mark_node_failed("nodeA") == ["obj1"]
+    assert d.get("obj1").state is ObjectState.UNAVAILABLE
+    assert d.get("obj2").state is ObjectState.REVOKED
 
 
 def test_two_coroutines_on_the_same_object_are_serialised():

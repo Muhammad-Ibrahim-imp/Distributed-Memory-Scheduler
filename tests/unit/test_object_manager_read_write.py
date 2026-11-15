@@ -230,6 +230,7 @@ async def test_slow_read_alloc_and_free_use_node_timeout() -> None:
     )) is None
 
     node.call_delays["alloc"] = 0
+    manager.scheduler = FakeScheduler(node_ids=["node-1"] * 25)
     object_id = await allocate(manager)
     node.call_delays["read"] = 0.05
     with pytest.raises(DSMTimeoutError):

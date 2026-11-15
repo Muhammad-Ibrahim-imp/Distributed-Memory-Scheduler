@@ -22,6 +22,10 @@ class ConsistencyManager:
         """Return the current version, or None when the object is untracked."""
         return self._versions.get(object_id)
 
+    def is_current(self, object_id: str, version: int) -> bool:
+        """Return whether a cached version matches the tracked object version."""
+        return self._versions.get(object_id) == version
+
     def get_lock(self, object_id: str) -> asyncio.Lock | None:
         """Return the object's write lock, or None when it is untracked."""
         return self._locks.get(object_id)
@@ -35,7 +39,7 @@ class ConsistencyManager:
         self._versions[object_id] = version
         return version
 
-    def remove(self, object_id: str) -> None:
+    def forget(self, object_id: str) -> None:
         """Stop tracking a freed object."""
         self._versions.pop(object_id, None)
         self._locks.pop(object_id, None)

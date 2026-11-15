@@ -104,6 +104,7 @@ class DefaultScheduler(Scheduler):
         self,
         object_id: str,
         object_size: int,
+        excluded_node_ids: set[str] | None = None,
     ) -> PlacementDecision:
 
         if self.node_state_provider is None:
@@ -112,6 +113,11 @@ class DefaultScheduler(Scheduler):
             )
 
         nodes = self.node_state_provider.get_nodes()
+        if excluded_node_ids:
+            nodes = [
+                node for node in nodes
+                if node.node_id not in excluded_node_ids
+            ]
 
         return self.select_node(
             object_id=object_id,

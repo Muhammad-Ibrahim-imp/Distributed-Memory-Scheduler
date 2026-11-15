@@ -6,6 +6,7 @@ from uuid import uuid4
 from common.interfaces.NodeClient import NodeClient
 from common.interfaces.dsm_api import DSMAPI
 from common.types.context import RequestContext
+from dsm.cache import ObjectCache
 from dsm.directory.directory import Directory
 from dsm.object_manager.dsm_alloc import (
     AccessChecker,
@@ -40,6 +41,7 @@ class Runtime:
         security: RuntimeSecurity,
         config: ObjectManagerConfig = ObjectManagerConfig(),
         node_timeout: float = 5.0,
+        cache: ObjectCache | None = None,
     ) -> None:
         """Initialize runtime dependencies and subscribe to node revocations."""
         self.object_manager = ObjectManager(
@@ -49,6 +51,7 @@ class Runtime:
             security=security,
             config=config,
             node_timeout=node_timeout,
+            cache=cache,
         )
         self.security = security
         register_listener = getattr(security, "register_revocation_listener", None)

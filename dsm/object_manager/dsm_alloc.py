@@ -63,6 +63,7 @@ class Scheduler(Protocol):
         self,
         object_id: str,
         object_size: int,
+        excluded_node_ids: set[str] | None = None,
     ) -> PlacementDecision:
         """Return the node selected for an object."""
 
@@ -157,6 +158,15 @@ class ObjectManager:
             timestamp,
         )
 
+    def handle_node_failure(self, node_id: str) -> list[str]:
+        """Mark a failed node's objects unavailable and evict their cache entries."""
+        if node_id in self._revoked_node_ids:
+            return []
+        affected = self.directory.mark_node_failed(node_id)
+        if self.cache is not None:
+            self.cache.invalidate_many(affected)
+        return affected
+
     async def alloc(
         self,
         ctx: RequestContext,
@@ -168,15 +178,21 @@ class ObjectManager:
             raise InvalidRequestError("size must be a positive integer")
 
         object_id = str(uuid4())
-        last_error: OutOfCapacityError | DSMTimeoutError | None = None
+        attempted_node_ids: set[str] = set()
+        last_error: (
+            OutOfCapacityError | QuotaExceededError | DSMTimeoutError | None
+        ) = None
 
         for _ in range(self.config.MAX_ALLOC_ATTEMPTS):
             try:
                 decision = self.scheduler.select_node_from_state(
                     object_id=object_id,
                     object_size=size,
+                    excluded_node_ids=attempted_node_ids,
                 )
             except RuntimeError as exc:
+                if last_error is not None:
+                    raise last_error
                 raise OutOfCapacityError(str(exc)) from exc
             except ValueError as exc:
                 raise InvalidRequestError(str(exc)) from exc
@@ -191,24 +207,20 @@ class ObjectManager:
                         size,
                     )
                 )
-            except OutOfCapacityError as exc:
+            except (OutOfCapacityError, QuotaExceededError) as exc:
+                attempted_node_ids.add(decision.node_id)
                 last_error = exc
                 continue
-            except QuotaExceededError:
-                raise
             except DSMTimeoutError as exc:
-                try:
-                    await self._call_node(
-                        self.node_client.free(
-                            ctx,
-                            decision.node_id,
-                            object_id,
-                            owner_identity,
-                        )
+                await self._call_node(
+                    self.node_client.free(
+                        ctx,
+                        decision.node_id,
+                        object_id,
+                        owner_identity,
                     )
-                except Exception:
-                    # A timed-out allocation may have reserved space; cleanup must not block retry.
-                    pass
+                )
+                attempted_node_ids.add(decision.node_id)
                 last_error = exc
                 continue
 
@@ -250,12 +262,15 @@ class ObjectManager:
         ):
             raise NotOwnerError("caller is not the object owner")
 
-        if record.state is ObjectState.REVOKED:
-            raise ObjectUnavailableError("object is on a revoked node")
+        if record.state in (ObjectState.UNAVAILABLE, ObjectState.REVOKED):
+            raise ObjectUnavailableError("object is on an unavailable node")
 
         if self.cache is not None:
             cached_entry = self.cache.get(object_id)
-            if cached_entry is not None and cached_entry[0] == record.version:
+            if cached_entry is not None and self.directory.is_current(
+                object_id,
+                cached_entry[0],
+            ):
                 return cached_entry[1]
 
         # Capture before the await so a delayed reader cannot stamp new bytes with a later version.
@@ -322,7 +337,11 @@ class ObjectManager:
             record = self.directory.get(object_id)
             if record is None:
                 raise ObjectNotFoundError(object_id)
-            if record.state in (ObjectState.QUARANTINED, ObjectState.REVOKED):
+            if record.state in (
+                ObjectState.UNAVAILABLE,
+                ObjectState.QUARANTINED,
+                ObjectState.REVOKED,
+            ):
                 raise ObjectUnavailableError("object is not writable in its current state")
             if len(data) > record.size:
                 raise InvalidRequestError("data exceeds the allocated size")

@@ -34,39 +34,36 @@ class DSMAPI(Protocol):
         `size` must be > 0. There is no separate "grow": an object is fixed
         at the size it was allocated.
 
-        Raises: InvalidRequestError, OutOfCapacityError (the cluster is full),
-        QuotaExceededError (the cluster has room but THIS client is over its
-        own cap -- policy §5), DSMTimeoutError, plus pipeline errors
+        Raises: InvalidRequestError, OutOfCapacityError (the selected node is
+        full), QuotaExceededError (THIS client exceeded its quota on the
+        selected node -- policy §5), DSMTimeoutError, plus pipeline errors
         (AuthenticationError, RateLimitedError).
         """
         ...
 
     async def read(self, object_id: str) -> bytes:
-        """Return the object's bytes. Always exactly the allocated size.
+        """Return the bytes last written to the object, or b"" if never written.
 
-        An object that was allocated but never written reads as `size` ZERO
-        bytes -- never uninitialized memory. This is a security requirement,
-        not a convenience: handing back a stale buffer would leak whatever
-        this node held previously to an unrelated client. A1 owns object
-        isolation; this is the API half of the same promise.
+        Reads are full-value replacements, not fixed-size zero-padded buffers.
+        A1 initializes unwritten objects as empty and isolates each allocation,
+        so no previous owner's bytes can be exposed.
 
         Raises: ObjectNotFoundError, NotOwnerError, IntegrityError,
-        DSMTimeoutError, plus pipeline errors. ObjectUnavailableError only
-        when the object's node is REVOKED -- on QUARANTINED, reads stay open
-        so data isn't stranded (policy §6.3, §7.4).
+        DSMTimeoutError, plus pipeline errors. ObjectUnavailableError when the
+        object's node has failed or is REVOKED. QUARANTINED nodes remain
+        readable so data isn't stranded (policy §6.3, §7.4).
         """
         ...
 
     async def write(self, object_id: str, data: bytes) -> None:
-        """Store `data` in the object.
+        """Replace the object's complete value with `data`.
 
-        `data` may be SHORTER than the allocated size: the first len(data)
-        bytes are replaced and the remainder keeps whatever it held before
-        (zeros, if never written). It may NOT be LONGER -- an object does not
-        grow, so that is InvalidRequestError, not OutOfCapacityError.
+        `data` may be shorter than the allocated size, but it replaces the
+        entire previous value. It may NOT be longer -- an object does not grow,
+        so that is InvalidRequestError, not OutOfCapacityError.
 
         Raises: ObjectNotFoundError, NotOwnerError, ObjectUnavailableError
-        (REVOKED, or QUARANTINED -- writes are blocked in both),
+        (node failed, REVOKED, or QUARANTINED -- writes are blocked in all),
         InvalidRequestError (len(data) > allocated size), DSMTimeoutError,
         plus pipeline errors.
         """
@@ -81,11 +78,10 @@ class DSMAPI(Protocol):
         client's allocations and its quota forever with no way to clean up.
         Policy §6.3's "reads only" blocks content writes, not release.
 
-        On REVOKED this raises ObjectUnavailableError if it is reached at all,
-        but in practice the connection was already force-closed (§7.2), so the
-        call fails at the transport layer first.
+        On REVOKED the remote node is not contacted; local metadata is dropped
+        because cleanup cannot be performed through the revoked connection.
 
-        Raises only: NotOwnerError, ObjectUnavailableError (REVOKED),
-        InvalidRequestError, or pipeline errors.
+        Raises only: NotOwnerError, ObjectUnavailableError, InvalidRequestError,
+        or pipeline errors.
         """
         ...

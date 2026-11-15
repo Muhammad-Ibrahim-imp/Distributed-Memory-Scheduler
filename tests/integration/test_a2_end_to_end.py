@@ -10,6 +10,7 @@ from common.types.errors import (
     ObjectUnavailableError,
 )
 from common.types.security import TrustState
+from dsm.cache import ObjectCache
 from dsm.directory.directory import Directory, ObjectState
 from dsm.object_manager import ObjectManagerConfig
 from dsm.runtime import Runtime
@@ -18,6 +19,7 @@ from tests.mocks.fakes import FakeNodeClient, FakeScheduler, FakeSecurity
 
 def make_runtime(
     node_ids: list[str] | None = None,
+    cache: ObjectCache | None = None,
 ) -> tuple[Runtime, Directory, FakeSecurity, FakeNodeClient]:
     """Construct a runtime with node, scheduler, and security fakes."""
     directory = Directory()
@@ -31,6 +33,7 @@ def make_runtime(
         ),
         security=security,
         config=ObjectManagerConfig(),
+        cache=cache,
     )
     return runtime, directory, security, node_client
 
@@ -110,3 +113,22 @@ async def test_quarantine_recovers_but_revocation_is_permanent() -> None:
     manager.handle_node_revoked("node-R", 3.0)
     manager.handle_node_trust_state_changed("node-R", TrustState.TRUSTED, 4.0)
     assert directory.get(revoked_id).state is ObjectState.REVOKED
+
+
+async def test_node_failure_blocks_object_access_and_invalidates_cache() -> None:
+    """A failed node cannot serve data from either the node or local cache."""
+    cache = ObjectCache()
+    runtime, directory, _, _ = make_runtime(cache=cache)
+    alice = runtime.bind("alice")
+    object_id = await alice.alloc(16)
+    await alice.write(object_id, b"payload")
+    assert await alice.read(object_id) == b"payload"
+
+    assert runtime.object_manager.handle_node_failure("node-1") == [object_id]
+
+    assert directory.get(object_id).state is ObjectState.UNAVAILABLE
+    assert cache.get(object_id) is None
+    with pytest.raises(ObjectUnavailableError):
+        await alice.read(object_id)
+    with pytest.raises(ObjectUnavailableError):
+        await alice.write(object_id, b"blocked")
