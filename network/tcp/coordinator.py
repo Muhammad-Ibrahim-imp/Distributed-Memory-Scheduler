@@ -5,6 +5,7 @@ import ssl
 
 from common.protocol import dsm_pb2
 from common.types.errors import ObjectNotFoundError, TokenExpiredError, TokenInvalidError, DSMError
+from common.types.context import RequestContext
 from common.types.security import EventType, Result, Severity, TrustState
 from network.tcp.connection import Connection, DEFAULT_TIMEOUT
 from network.tcp.registry import NodeRegistry
@@ -22,9 +23,9 @@ class CoordinatorServer:
         self.trust = trust
         self.audit = audit
         
-        # Post-auth identity rate limiter
+        # Main post-auth rate limiter
         self.rate_limit = RateLimiter()
-        # Pre-auth IP rate limiter (limits are configurable via RateLimiter constructor)
+        # Pre-auth IP rate limiter for Register/Refresh
         self.pre_auth_limit = RateLimiter(capacity=20, refill_per_second=5.0)
         
         self.replay = ReplayGuard()
@@ -63,17 +64,18 @@ class CoordinatorServer:
             cert = ssl_obj.getpeercert(binary_form=True)
             if cert:
                 fingerprint = hashlib.sha256(cert).hexdigest()
-        
+
         conn.set_handler(lambda env, c=conn, f=fingerprint, ip=peer_ip: self._handle(env, c, f, ip))
         conn.start()
 
     async def _handle(self, env, conn, cert_fingerprint, peer_ip):
         field = env.WhichOneof("payload")
 
-        # 1. Pre-auth IP rate limiting for Register and Refresh
+        # 1. Pre-auth IP rate limiting for Register and Refresh (Policy §9.3)
         if field in ("register", "refresh"):
             actor_id = f"ip:{peer_ip}"
             if not self.pre_auth_limit.check(actor_id):
+                # Log without escalating trust state, using IP as actor_id
                 await self._audit("rate_limit_violation", env, "rejected", actor_id=actor_id)
                 await self._send_error(conn, env, "RATE_LIMITED", "pre-auth rate limit exceeded")
                 return
@@ -82,6 +84,7 @@ class CoordinatorServer:
             await self._handle_register(env, conn, cert_fingerprint)
             return
         elif field == "refresh":
+            await self._handle_refresh(env, conn)
             return
         elif field == "node_stats":
             self.registry.set_stats(env.node_stats.node_id, env.node_stats)
@@ -125,27 +128,29 @@ class CoordinatorServer:
             await self._send_error(conn, env, "RATE_LIMITED", "rate limited")
             return
 
+        # Route to A2
         await self._route_to_runtime(env, conn)
 
     async def _route_to_runtime(self, env, conn):
         dsm = self.runtime.bind(env.identity)
         rid = self._rid_of(env)
+        field = env.WhichOneof("payload")
         try:
-            if env.WhichOneof("payload") == "alloc":
+            if field == "alloc":
                 obj_id = await dsm.alloc(env.alloc.size)
                 resp = dsm_pb2.Envelope()
                 resp.alloc_response.request_id = rid
                 resp.alloc_response.object_id = obj_id
-            elif env.WhichOneof("payload") == "read":
+            elif field == "read":
                 data = await dsm.read(env.read.object_id)
                 resp = dsm_pb2.Envelope()
                 resp.read_response.request_id = rid
                 resp.read_response.data = data
-            elif env.WhichOneof("payload") == "write":
+            elif field == "write":
                 await dsm.write(env.write.object_id, env.write.data)
                 resp = dsm_pb2.Envelope()
                 resp.write_response.request_id = rid
-            elif env.WhichOneof("payload") == "free":
+            elif field == "free":
                 await dsm.free(env.free.object_id)
                 resp = dsm_pb2.Envelope()
                 resp.free_response.request_id = rid
@@ -171,6 +176,21 @@ class CoordinatorServer:
         except Exception as exc:
             await self._send_error(conn, env, "INVALID_REQUEST", str(exc))
 
+    async def _handle_refresh(self, env, conn):
+        """Credential -> fresh token (policy section 3.3). Pre-auth message."""
+        rid = env.refresh.request_id
+        try:
+            result = self.auth_service.authenticate(
+                env.refresh.identity, env.refresh.credential, rid
+            )
+        except Exception:
+            await self._send_error(conn, env, "AUTH_REJECTED", "authentication failed")
+            return
+        resp = dsm_pb2.Envelope()
+        resp.refresh_response.request_id = rid
+        resp.refresh_response.token = result.token
+        await conn.send(resp)
+
     def _validate_envelope(self, env) -> bool:
         return bool(env.identity and env.token and env.nonce and env.timestamp)
 
@@ -192,7 +212,7 @@ class CoordinatorServer:
     async def _audit(self, event_type_name: str, env, result: str, actor_id: str | None = None, **extra):
         if self.audit is None:
             return
-        # M5: log throttles as actor_id = "ip:<addr>" without escalating trust state
+        # Use IP for pre-auth events, identity for post-auth events
         actor = actor_id if actor_id else (env.identity or "-")
         try:
             self.audit.log_security_event(
