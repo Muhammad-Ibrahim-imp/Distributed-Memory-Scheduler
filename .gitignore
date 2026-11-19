@@ -15,4 +15,4 @@ venv/
 
 data/
 logs/
-certs/
+certs/repomix-output.xml

@@ -3,7 +3,7 @@ Server SAN covers 'coordinator' (Docker service name), 'localhost', 127.0.0.1.
 Run from project root: python scripts/gen_certs.py
 """
 import ipaddress
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from cryptography import x509
@@ -35,6 +35,15 @@ def save_cert(c, path):
 def main():
     ca_key = key()
     ca_subj = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "dsm-dev-ca")])
+    
+    # CA needs KeyUsage to prove it can sign certs
+    ca_key_usage = x509.KeyUsage(
+        digital_signature=False, content_commitment=False, 
+        key_encipherment=False, data_encipherment=False, 
+        key_agreement=False, key_cert_sign=True, crl_sign=True, 
+        encipher_only=False, decipher_only=False
+    )
+
     ca_cert = (
         x509.CertificateBuilder()
         .subject_name(ca_subj).issuer_name(ca_subj)
@@ -43,10 +52,22 @@ def main():
         .not_valid_before(datetime.utcnow())
         .not_valid_after(datetime.utcnow() + timedelta(days=DAYS))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(ca_key_usage, critical=True)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
     save_key(ca_key, OUT / "ca.key")
     save_cert(ca_cert, OUT / "ca.pem")
+
+    ca_aki = x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_key.public_key())
+    
+    # End-entity certs need KeyUsage for signatures and encipherment
+    leaf_key_usage = x509.KeyUsage(
+        digital_signature=True, content_commitment=False, 
+        key_encipherment=True, data_encipherment=False, 
+        key_agreement=False, key_cert_sign=False, crl_sign=False, 
+        encipher_only=False, decipher_only=False
+    )
 
     srv_key = key()
     srv_cert = (
@@ -62,6 +83,9 @@ def main():
             x509.DNSName("localhost"),
             x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
         ]), critical=False)
+        .add_extension(leaf_key_usage, critical=True)
+        .add_extension(ca_aki, critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(srv_key.public_key()), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
     save_key(srv_key, OUT / "server.key")
@@ -76,6 +100,9 @@ def main():
         .serial_number(x509.random_serial_number())
         .not_valid_before(datetime.utcnow())
         .not_valid_after(datetime.utcnow() + timedelta(days=DAYS))
+        .add_extension(leaf_key_usage, critical=True)
+        .add_extension(ca_aki, critical=False)
+        .add_extension(x509.SubjectKeyIdentifier.from_public_key(cli_key.public_key()), critical=False)
         .sign(ca_key, hashes.SHA256())
     )
     save_key(cli_key, OUT / "client.key")
