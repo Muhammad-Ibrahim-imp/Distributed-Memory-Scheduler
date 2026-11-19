@@ -72,6 +72,7 @@ class NodeService:
         req = getattr(env, field)
         rid = req.request_id
         ctx = self._ctx(rid)
+        print(f"[node {self.label}] {field} {req.object_id}")
         resp = dsm_pb2.Envelope()
         try:
             if field == "alloc":

@@ -10,6 +10,7 @@ from network.tcp.node_client import NodeClient
 from network.tcp.registry import NodeRegistry
 from network.tcp.bandwidth_probe import BandwidthProbe
 from network.tcp.network_state import RegistryNetworkStateProvider
+from network.tcp.resource_state import RegistryResourceProvider
 from common.types.security import EventType, Result, Severity, TrustState
 
 # A2's Runtime and Directory
@@ -20,10 +21,6 @@ from dsm.directory.directory import Directory
 from scheduler.config import load_scheduler_config
 from scheduler.factory import create_scheduler
 
-# Temporary A1 Dummy Provider
-from common.interfaces.resource_state import ResourceStateProvider
-from common.types.resource import ResourceStats
-
 # B2 Interfaces
 from common.interfaces.security_state import SecurityStateProvider
 from common.interfaces.node_state import NodeStateProvider
@@ -31,11 +28,6 @@ from common.types.node import NodeStats
 
 
 # --- TEMPORARY MOCKS ---
-class DummyResourceProvider(ResourceStateProvider):
-    def get_resource_state(self, node_id):
-        return ResourceStats(free_ram=8_000_000_000, cpu_usage=10.0, health=1.0)
-
-
 class MockTrustProvider(SecurityStateProvider):
     def get_trust_state(self, node_id):
         return TrustState.TRUSTED
@@ -103,8 +95,8 @@ async def main():
     # 3. A2 Directory
     directory = Directory()
 
-    # 4. B2 Scheduler
-    res_provider = DummyResourceProvider()
+    # 4. B2 Scheduler (real per-node resources from heartbeats)
+    res_provider = RegistryResourceProvider(registry)
     net_provider = RegistryNetworkStateProvider(registry)
     sec_provider = MockTrustProvider()
     node_provider = DynamicNodeProvider(registry, res_provider, net_provider, sec_provider)
