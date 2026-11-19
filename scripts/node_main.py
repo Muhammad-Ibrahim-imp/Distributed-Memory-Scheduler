@@ -7,10 +7,6 @@ import yaml
 from memory_node.node import MemoryNode
 from network.tcp.node_service import NodeService
 
-def event_sink(event):
-    """A1 will call this when it detects a security event (e.g., integrity failure)."""
-    print(f"[node security event] {event}")
-
 async def main():
     node_id = os.environ.get("NODE_ID", "node-1")
     
@@ -37,8 +33,14 @@ async def main():
     except FileNotFoundError:
         pass
 
+    # Create the queue for A1's events
+    event_queue = asyncio.Queue()
+
+    def event_sink(event):
+        # Queue the event for the network layer to send over the wire
+        event_queue.put_nowait(event)
+
     # A1's node. 
-    # If there is no usable memory left, this will raise ValueError. We let it crash.
     memory_node = MemoryNode(
         node_id=node_id, 
         total_capacity_bytes=total_capacity,
@@ -49,10 +51,11 @@ async def main():
         event_sink=event_sink
     )
     
-    # B1's service wrapping it
+    # B1's service wrapping it (passing the queue)
     service = NodeService(
         host=host, port=port, label=node_id,
-        enrollment_secret=secret, memory_node=memory_node
+        enrollment_secret=secret, memory_node=memory_node,
+        event_queue=event_queue
     )
     
     print(f"[node] starting {node_id} targeting {host}:{port}")
