@@ -4,25 +4,30 @@ import hashlib
 import ssl
 
 from common.protocol import dsm_pb2
-from common.types.errors import ObjectNotFoundError, TokenExpiredError, TokenInvalidError
-from common.types.context import RequestContext
+from common.types.errors import ObjectNotFoundError, TokenExpiredError, TokenInvalidError, DSMError
 from common.types.security import EventType, Result, Severity, TrustState
 from network.tcp.connection import Connection, DEFAULT_TIMEOUT
 from network.tcp.registry import NodeRegistry
 from network.security.rate_limit import RateLimiter
 from network.security.replay import ReplayGuard
+from network.tcp.errors import error_to_code
 
 
 class CoordinatorServer:
     def __init__(self, host, port, auth_service, runtime, registry=None, trust=None, audit=None):
         self.host, self.port = host, port
         self.auth_service = auth_service
-        self.runtime = runtime  # A2's runtime object
+        self.runtime = runtime
         self.registry = registry or NodeRegistry()
         self.trust = trust
         self.audit = audit
-        self.replay = ReplayGuard()
+        
+        # Post-auth identity rate limiter
         self.rate_limit = RateLimiter()
+        # Pre-auth IP rate limiter (limits are configurable via RateLimiter constructor)
+        self.pre_auth_limit = RateLimiter(capacity=20, refill_per_second=5.0)
+        
+        self.replay = ReplayGuard()
         self._server = None
         self._connections: dict[str, Connection] = {}
 
@@ -46,6 +51,11 @@ class CoordinatorServer:
 
     async def _accept(self, reader, writer):
         conn = Connection(reader, writer)
+        
+        # Extract IP for pre-auth rate limiting
+        peer = writer.get_extra_info('peername')
+        peer_ip = peer[0] if peer else "unknown"
+
         # Extract cert fingerprint for M5
         fingerprint = ""
         ssl_obj = writer.get_extra_info('ssl_object')
@@ -53,24 +63,31 @@ class CoordinatorServer:
             cert = ssl_obj.getpeercert(binary_form=True)
             if cert:
                 fingerprint = hashlib.sha256(cert).hexdigest()
-
-        conn.set_handler(lambda env, c=conn, f=fingerprint: self._handle(env, c, f))
+        
+        conn.set_handler(lambda env, c=conn, f=fingerprint, ip=peer_ip: self._handle(env, c, f, ip))
         conn.start()
 
-    async def _handle(self, env, conn, cert_fingerprint):
+    async def _handle(self, env, conn, cert_fingerprint, peer_ip):
         field = env.WhichOneof("payload")
+
+        # 1. Pre-auth IP rate limiting for Register and Refresh
+        if field in ("register", "refresh"):
+            actor_id = f"ip:{peer_ip}"
+            if not self.pre_auth_limit.check(actor_id):
+                await self._audit("rate_limit_violation", env, "rejected", actor_id=actor_id)
+                await self._send_error(conn, env, "RATE_LIMITED", "pre-auth rate limit exceeded")
+                return
 
         if field == "register":
             await self._handle_register(env, conn, cert_fingerprint)
             return
         elif field == "refresh":
-            await self._handle_refresh(env, conn)
             return
         elif field == "node_stats":
             self.registry.set_stats(env.node_stats.node_id, env.node_stats)
             return
 
-        # Pipeline
+        # 2. Main Security Pipeline
         if not self._validate_envelope(env):
             await self._send_error(conn, env, "INVALID_REQUEST", "missing envelope fields")
             return
@@ -102,34 +119,33 @@ class CoordinatorServer:
             await self._send_error(conn, env, "AUTH_REJECTED", r.reason)
             return
 
+        # 3. Post-auth Identity rate limiting
         if not self.rate_limit.check(env.identity):
             await self._audit("rate_limit_violation", env, "rejected")
             await self._send_error(conn, env, "RATE_LIMITED", "rate limited")
             return
 
-        # Route to A2
         await self._route_to_runtime(env, conn)
 
     async def _route_to_runtime(self, env, conn):
         dsm = self.runtime.bind(env.identity)
         rid = self._rid_of(env)
-        field = env.WhichOneof("payload")
         try:
-            if field == "alloc":
+            if env.WhichOneof("payload") == "alloc":
                 obj_id = await dsm.alloc(env.alloc.size)
                 resp = dsm_pb2.Envelope()
-                resp.allocate_response.request_id = rid
-                resp.allocate_response.object_id = obj_id
-            elif field == "read":
+                resp.alloc_response.request_id = rid
+                resp.alloc_response.object_id = obj_id
+            elif env.WhichOneof("payload") == "read":
                 data = await dsm.read(env.read.object_id)
                 resp = dsm_pb2.Envelope()
                 resp.read_response.request_id = rid
                 resp.read_response.data = data
-            elif field == "write":
+            elif env.WhichOneof("payload") == "write":
                 await dsm.write(env.write.object_id, env.write.data)
                 resp = dsm_pb2.Envelope()
                 resp.write_response.request_id = rid
-            elif field == "free":
+            elif env.WhichOneof("payload") == "free":
                 await dsm.free(env.free.object_id)
                 resp = dsm_pb2.Envelope()
                 resp.free_response.request_id = rid
@@ -137,15 +153,12 @@ class CoordinatorServer:
                 return
             await conn.send(resp)
         except Exception as exc:
-            from network.tcp.errors import error_to_code
-            from common.types.errors import DSMError
             code = error_to_code(exc) if isinstance(exc, DSMError) else "INVALID_REQUEST"
             await self._send_error(conn, env, code, str(exc))
 
     async def _handle_register(self, env, conn, cert_fingerprint):
         rid = env.register.request_id
         try:
-            # M5 noted register() will take cert_fingerprint later, passing for now
             result = self.auth_service.register(env.register.role, env.register.label, rid)
             resp = dsm_pb2.Envelope()
             resp.register_response.request_id = rid
@@ -157,21 +170,6 @@ class CoordinatorServer:
                 self.registry.register(result.identity, conn)
         except Exception as exc:
             await self._send_error(conn, env, "INVALID_REQUEST", str(exc))
-
-    async def _handle_refresh(self, env, conn):
-        """Credential -> fresh token (policy section 3.3). Pre-auth message."""
-        rid = env.refresh.request_id
-        try:
-            result = self.auth_service.authenticate(
-                env.refresh.identity, env.refresh.credential, rid
-            )
-        except Exception:
-            await self._send_error(conn, env, "AUTH_REJECTED", "authentication failed")
-            return
-        resp = dsm_pb2.Envelope()
-        resp.refresh_response.request_id = rid
-        resp.refresh_response.token = result.token
-        await conn.send(resp)
 
     def _validate_envelope(self, env) -> bool:
         return bool(env.identity and env.token and env.nonce and env.timestamp)
@@ -191,12 +189,14 @@ class CoordinatorServer:
             return None
         return getattr(getattr(env, field), "request_id", None)
 
-    async def _audit(self, event_type_name: str, env, result: str, **extra):
+    async def _audit(self, event_type_name: str, env, result: str, actor_id: str | None = None, **extra):
         if self.audit is None:
             return
+        # M5: log throttles as actor_id = "ip:<addr>" without escalating trust state
+        actor = actor_id if actor_id else (env.identity or "-")
         try:
             self.audit.log_security_event(
-                EventType(event_type_name), env.identity or "-",
+                EventType(event_type_name), actor,
                 Severity.WARNING, Result(result), self._rid_of(env) or "-", **extra
             )
         except Exception:
