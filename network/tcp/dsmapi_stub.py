@@ -16,7 +16,7 @@ class RemoteDSMAPI:
         self.token: str | None = None
         self.credential: str | None = None
         self.connection: Connection | None = None
-        self.refresh_callback = refresh_callback
+        self.refresh_callback = refresh_callback   # optional override; default is the built-in refresh
         self._counter = 0
 
     async def connect(self):
@@ -26,6 +26,7 @@ class RemoteDSMAPI:
         self.connection = Connection(reader, writer)
         self.connection.start()
         await self._register()
+        await self._refresh()
 
     async def close(self):
         if self.connection:
@@ -56,12 +57,26 @@ class RemoteDSMAPI:
         self.identity = resp.register_response.identity
         self.credential = resp.register_response.credential
 
+    async def _refresh(self):
+        """Exchange the credential for a fresh token."""
+        if self.refresh_callback is not None:
+            self.token = self.refresh_callback(self.token)
+            return
+        env = self._env()
+        env.refresh.request_id = self._rid()
+        env.refresh.identity = self.identity or ""
+        env.refresh.credential = self.credential or ""
+        resp = await self.connection.call(env)
+        if resp.WhichOneof("payload") == "error":
+            raise code_to_error(resp.error.code, resp.error.message)
+        self.token = resp.refresh_response.token
+
     async def _call(self, env):
         resp = await self.connection.call(env)
         if resp.WhichOneof("payload") == "error":
             err = code_to_error(resp.error.code, resp.error.message)
-            if isinstance(err, TokenExpiredError) and self.refresh_callback is not None:
-                self.token = self.refresh_callback(self.token)
+            if isinstance(err, TokenExpiredError):
+                await self._refresh()
                 env.token = self.token
                 env.nonce = self._rid()   # NEW nonce; SAME request_id
                 resp = await self.connection.call(env)
@@ -73,8 +88,8 @@ class RemoteDSMAPI:
 
     async def alloc(self, size: int) -> str:
         env = self._env()
-        env.allocate.request_id = self._rid()
-        env.allocate.size = size
+        env.alloc.request_id = self._rid()
+        env.alloc.size = size
         return (await self._call(env)).allocate_response.object_id
 
     async def read(self, object_id: str) -> bytes:

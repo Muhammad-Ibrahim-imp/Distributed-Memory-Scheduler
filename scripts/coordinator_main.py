@@ -6,6 +6,7 @@ import asyncio
 import ssl
 from security.bootstrap import build_security_core
 from network.tcp.coordinator import CoordinatorServer, NodeRouter
+from network.tcp.node_client import NodeClient
 from network.tcp.registry import NodeRegistry
 from network.tcp.bandwidth_probe import BandwidthProbe
 from network.tcp.network_state import RegistryNetworkStateProvider
@@ -28,30 +29,48 @@ from common.interfaces.security_state import SecurityStateProvider
 from common.interfaces.node_state import NodeStateProvider
 from common.types.node import NodeStats
 
+
 # --- TEMPORARY MOCKS ---
 class DummyResourceProvider(ResourceStateProvider):
-    def get_resource_state(self, node_id): 
+    def get_resource_state(self, node_id):
         return ResourceStats(free_ram=8_000_000_000, cpu_usage=10.0, health=1.0)
 
+
 class MockTrustProvider(SecurityStateProvider):
-    def get_trust_state(self, node_id): 
+    def get_trust_state(self, node_id):
         return TrustState.TRUSTED
 
+
 class SecurityWrapper:
-    """Wraps M5's SecurityCore to provide the revocation listener A2 expects."""
+    """Gives A2's Runtime the two things it calls on `security`:
+    check_access(...) and register_revocation_listener(...).
+    Everything else is forwarded to M5's SecurityCore."""
     def __init__(self, core):
         self._core = core
 
+    def check_access(self, identity, owner_identity, action, object_id):
+        """Ownership rule (policy section 8): only the owner may read/write/free."""
+        if identity and identity == owner_identity:
+            return True
+        self._core.audit.log_security_event(
+            EventType.AUTHZ_DENIED, identity or "unknown", Severity.WARNING,
+            Result.REJECTED, "-",
+            object_id=object_id, action=str(action), reason="not_owner",
+        )
+        return False
+
     def register_revocation_listener(self, callback):
-        pass # Dummy method until M5 builds it
+        pass  # Dummy method until M5 builds it
 
     def __getattr__(self, name):
         return getattr(self._core, name)
+
 
 # --- B2 ADAPTERS ---
 class DynamicNodeProvider(NodeStateProvider):
     def __init__(self, registry, res, net, sec):
         self.registry, self.res, self.net, self.sec = registry, res, net, sec
+
     def get_nodes(self):
         out = []
         for nid in self.registry.list_ids():
@@ -67,6 +86,7 @@ class DynamicNodeProvider(NodeStateProvider):
                 pass
         return out
 
+
 async def main():
     host = os.environ.get("SECURITY_HOST", "0.0.0.0")
     port = int(os.environ.get("SECURITY_PORT", 8443))
@@ -78,6 +98,7 @@ async def main():
     # 2. B1 Network
     registry = NodeRegistry()
     router = NodeRouter(registry)
+    node_client = NodeClient(router)   # A2's NodeClient protocol on top of B1's router
 
     # 3. A2 Directory
     directory = Directory()
@@ -94,9 +115,9 @@ async def main():
     # 5. A2 Runtime
     runtime = Runtime(
         directory=directory,
+        node_client=node_client,
         scheduler=scheduler,
-        security=sec_wrapper, # Passing the wrapper here
-        node_client=router
+        security=sec_wrapper,
     )
 
     # 6. B1 Server
@@ -107,6 +128,7 @@ async def main():
 
     # 7. TLS Error Handler
     loop = asyncio.get_running_loop()
+
     def tls_error_handler(loop, context):
         exc = context.get("exception")
         if isinstance(exc, ssl.SSLError):
@@ -134,6 +156,7 @@ async def main():
         probe.stop()
         probe_task.cancel()
         await server.stop()
+
 
 if __name__ == "__main__":
     asyncio.run(main())

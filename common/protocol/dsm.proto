@@ -37,6 +37,7 @@ message Register {
   string role = 2;
   string label = 3;
   string client_nonce = 4;
+  string request_id = 5;
 }
 
 message RegisterResponse {
@@ -48,6 +49,7 @@ message RegisterResponse {
 message Refresh {
   string identity = 1;
   string credential = 2;
+  string request_id = 3;
 }
 
 message RefreshResponse {

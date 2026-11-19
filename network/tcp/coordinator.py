@@ -53,7 +53,7 @@ class CoordinatorServer:
             cert = ssl_obj.getpeercert(binary_form=True)
             if cert:
                 fingerprint = hashlib.sha256(cert).hexdigest()
-        
+
         conn.set_handler(lambda env, c=conn, f=fingerprint: self._handle(env, c, f))
         conn.start()
 
@@ -64,7 +64,7 @@ class CoordinatorServer:
             await self._handle_register(env, conn, cert_fingerprint)
             return
         elif field == "refresh":
-            # Handled in Week 5, no-op for now
+            await self._handle_refresh(env, conn)
             return
         elif field == "node_stats":
             self.registry.set_stats(env.node_stats.node_id, env.node_stats)
@@ -113,22 +113,23 @@ class CoordinatorServer:
     async def _route_to_runtime(self, env, conn):
         dsm = self.runtime.bind(env.identity)
         rid = self._rid_of(env)
+        field = env.WhichOneof("payload")
         try:
-            if env.WhichOneof("payload") == "allocate":
-                obj_id = await dsm.alloc(env.allocate.size)
+            if field == "alloc":
+                obj_id = await dsm.alloc(env.alloc.size)
                 resp = dsm_pb2.Envelope()
                 resp.allocate_response.request_id = rid
                 resp.allocate_response.object_id = obj_id
-            elif env.WhichOneof("payload") == "read":
+            elif field == "read":
                 data = await dsm.read(env.read.object_id)
                 resp = dsm_pb2.Envelope()
                 resp.read_response.request_id = rid
                 resp.read_response.data = data
-            elif env.WhichOneof("payload") == "write":
+            elif field == "write":
                 await dsm.write(env.write.object_id, env.write.data)
                 resp = dsm_pb2.Envelope()
                 resp.write_response.request_id = rid
-            elif env.WhichOneof("payload") == "free":
+            elif field == "free":
                 await dsm.free(env.free.object_id)
                 resp = dsm_pb2.Envelope()
                 resp.free_response.request_id = rid
@@ -156,6 +157,21 @@ class CoordinatorServer:
                 self.registry.register(result.identity, conn)
         except Exception as exc:
             await self._send_error(conn, env, "INVALID_REQUEST", str(exc))
+
+    async def _handle_refresh(self, env, conn):
+        """Credential -> fresh token (policy section 3.3). Pre-auth message."""
+        rid = env.refresh.request_id
+        try:
+            result = self.auth_service.authenticate(
+                env.refresh.identity, env.refresh.credential, rid
+            )
+        except Exception:
+            await self._send_error(conn, env, "AUTH_REJECTED", "authentication failed")
+            return
+        resp = dsm_pb2.Envelope()
+        resp.refresh_response.request_id = rid
+        resp.refresh_response.token = result.token
+        await conn.send(resp)
 
     def _validate_envelope(self, env) -> bool:
         return bool(env.identity and env.token and env.nonce and env.timestamp)

@@ -2,7 +2,9 @@ import asyncio
 import time
 
 from common.protocol import dsm_pb2
-from common.types.errors import DSMError, ObjectNotFoundError
+from common.types.context import RequestContext
+from common.types.errors import DSMError
+from network.security.tls import client_context
 from network.tcp.connection import Connection
 from network.tcp.errors import error_to_code
 
@@ -56,40 +58,38 @@ class NodeService:
             raise ConnectionError(f"register failed: {resp.error.message}")
         self.identity = resp.register_response.identity
         self.credential = resp.register_response.credential
+        # A1: every registration issues a fresh identity; the node must use it.
+        self.memory_node.update_node_identity(self.identity)
         print(f"[node] registered as {self.identity}")
+
+    def _ctx(self, rid: str) -> RequestContext:
+        return RequestContext(identity="coordinator", request_id=rid)
 
     async def _handle(self, env: dsm_pb2.Envelope):
         field = env.WhichOneof("payload")
-        if field == "read":
-            rid = env.read.request_id
-            try:
-                data = await self.memory_node.load(env.read.object_id, env.read.owner_identity)
-                resp = dsm_pb2.Envelope()
-                resp.read_response.request_id = rid
-                resp.read_response.data = data
-            except Exception as exc:
-                resp = self._error(rid, exc)
-        elif field == "write":
-            rid = env.write.request_id
-            try:
-                await self.memory_node.store(env.write.object_id, env.write.owner_identity, env.write.data)
-                resp = dsm_pb2.Envelope()
-                resp.write_response.request_id = rid
-            except Exception as exc:
-                resp = self._error(rid, exc)
-        elif field == "free":
-            rid = env.free.request_id
-            try:
-                await self.memory_node.delete(env.free.object_id, env.free.owner_identity)
-            except ObjectNotFoundError:
-                pass
-            except Exception as exc:
-                await self.connection.send(self._error(rid, exc))
-                return
-            resp = dsm_pb2.Envelope()
-            resp.free_response.request_id = rid
-        else:
+        if field not in ("alloc", "read", "write", "free"):
             return
+        req = getattr(env, field)
+        rid = req.request_id
+        ctx = self._ctx(rid)
+        resp = dsm_pb2.Envelope()
+        try:
+            if field == "alloc":
+                await self.memory_node.alloc(ctx, req.object_id, req.owner_identity, req.size)
+                resp.allocate_response.request_id = rid
+                resp.allocate_response.object_id = req.object_id
+            elif field == "read":
+                data = await self.memory_node.read(ctx, req.object_id, req.owner_identity)
+                resp.read_response.request_id = rid
+                resp.read_response.data = bytes(data)
+            elif field == "write":
+                await self.memory_node.write(ctx, req.object_id, req.owner_identity, req.data)
+                resp.write_response.request_id = rid
+            else:  # free
+                await self.memory_node.free(ctx, req.object_id, req.owner_identity)
+                resp.free_response.request_id = rid
+        except Exception as exc:
+            resp = self._error(rid, exc)
         await self.connection.send(resp)
 
     def _error(self, rid: str, exc: Exception) -> dsm_pb2.Envelope:
@@ -103,18 +103,18 @@ class NodeService:
     async def _heartbeat_loop(self):
         while not self._stop.is_set():
             try:
-                stats = await self.memory_node.get_stats()
+                report = await self.memory_node.get_node_report()
                 env = dsm_pb2.Envelope()
                 env.identity = self.identity or ""
                 env.timestamp = time.time()
                 env.node_stats.request_id = f"hb-{time.time_ns()}"
                 env.node_stats.node_id = self.identity or ""
-                env.node_stats.total_memory = int(getattr(stats, "total_memory", 0))
-                env.node_stats.used_memory = int(getattr(stats, "used_memory", 0))
-                env.node_stats.available_memory = int(getattr(stats, "available_memory", 0))
-                env.node_stats.cpu_percent = float(getattr(stats, "cpu_percent", 0.0))
-                env.node_stats.object_count = int(getattr(stats, "object_count", 0))
-                env.node_stats.health = float(getattr(stats, "health", 1.0))
+                env.node_stats.total_memory = int(report.total_memory)
+                env.node_stats.used_memory = int(report.used_memory)
+                env.node_stats.available_memory = int(report.available_memory)
+                env.node_stats.cpu_percent = float(report.cpu_percent)
+                env.node_stats.object_count = int(report.object_count)
+                env.node_stats.health = float(report.health)
                 await self.connection.send(env)
             except Exception as exc:
                 print(f"[node] heartbeat error: {exc}")
