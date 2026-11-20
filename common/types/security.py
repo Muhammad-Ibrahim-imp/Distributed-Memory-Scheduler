@@ -92,6 +92,7 @@ class EventType(str, Enum):
     # Node-local events, reported by A1 (policy §10.1). A failed secure delete
     # does NOT escalate -- see SINGLE_EVENT_ESCALATORS.
     SECURE_DELETE_FAILED = "secure_delete_failed"
+    OBJECT_INTEGRITY_FAILED = "object_integrity_failed"
 
 
 # Policy §6.4: one event of one of these types alone moves TRUSTED -> SUSPICIOUS.
@@ -108,6 +109,9 @@ class EventType(str, Enum):
 # integration, and TLS_CERTIFICATE_REJECTED is the one that means someone
 # presented a credential they should not have had.
 #
+# OBJECT_INTEGRITY_FAILED escalates once: a read detected stored bytes that no
+# longer match their recorded SHA-256. The object is preserved for investigation.
+#
 # SECURE_DELETE_FAILED is absent too, but it is the uncomfortable one: a
 # failed wipe means data that should be gone may still be readable. That is a
 # real exposure, so it logs at WARNING -- but it is an operational failure, not
@@ -120,6 +124,7 @@ SINGLE_EVENT_ESCALATORS = frozenset(
         EventType.REPLAY_DETECTED,
         EventType.TAMPER_DETECTED,
         EventType.TLS_CERTIFICATE_REJECTED,
+        EventType.OBJECT_INTEGRITY_FAILED,
     }
 )
 

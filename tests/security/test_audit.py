@@ -1,7 +1,7 @@
 import pytest
-from common.types.security import EventType, Result, Severity
+from common.types.security import EventType, Result, Severity, SINGLE_EVENT_ESCALATORS
 from security.monitoring import audit as audit_mod
-from security.monitoring.audit import AuditLogger, token_ref
+from security.monitoring.audit import AuditLogger, DEFAULT_SEVERITY, token_ref
 
 pytestmark = pytest.mark.security
 
@@ -29,6 +29,18 @@ def test_forbidden_keys_are_refused(tmp_path):
 
 def test_token_ref_is_short_and_not_the_token():
     assert len(token_ref("abc.def")) == 8 and "abc" not in token_ref("abc.def")
+
+
+def test_integrity_failure_is_critical_and_escalates_once(tmp_path):
+    log = AuditLogger(tmp_path / "a.jsonl")
+    log.emit(EventType.OBJECT_INTEGRITY_FAILED, "node-1", Result.FAILURE,
+             "read-1", object_id="object-1")
+    log.close()
+    (event,) = list(AuditLogger.read_events(tmp_path / "a.jsonl"))
+    assert event["severity"] == "critical"
+    assert EventType.OBJECT_INTEGRITY_FAILED in SINGLE_EVENT_ESCALATORS
+    assert EventType.SECURE_DELETE_FAILED not in SINGLE_EVENT_ESCALATORS
+    assert DEFAULT_SEVERITY[EventType.OBJECT_INTEGRITY_FAILED] is Severity.CRITICAL
 
 
 def test_rotation(tmp_path):

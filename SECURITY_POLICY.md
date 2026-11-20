@@ -262,7 +262,7 @@ REVOKED      → excluded + active connections force-closed
 
 | Transition | Trigger | Automatic or Manual |
 |---|---|---|
-| TRUSTED → SUSPICIOUS | 3 failed authentications within 60s, OR 1 detected replay/tampered-request event, OR 1 rejected TLS client certificate, OR repeated rate-limit violations within a short window | Automatic |
+| TRUSTED → SUSPICIOUS | 3 failed authentications within 60s, OR 1 detected replay/tampered-request event, OR 1 rejected TLS client certificate, OR 1 object integrity failure, OR repeated rate-limit violations within a short window | Automatic |
 | SUSPICIOUS → TRUSTED | 5 minutes with zero further violations | Automatic (checked lazily — §6.5) |
 | SUSPICIOUS → QUARANTINED | Any further security violation while already SUSPICIOUS | Automatic |
 | QUARANTINED → REVOKED | Any further violation while QUARANTINED | Automatic |
@@ -282,6 +282,7 @@ REVOKED      → excluded + active connections force-closed
 | Expired token | Reject, prompt refresh | None (routine, not a violation) |
 | Replay detected | Reject request | TRUSTED→SUSPICIOUS trigger (single event) |
 | Tampered request (token integrity check failed) | Reject | TRUSTED→SUSPICIOUS trigger (single event). Detected inside M5's `verify_token`, **not** by an envelope payload hash — see §3.6 and §9.3 |
+| Object integrity failure (stored SHA-256 mismatch on read) | Return `IntegrityError`; preserve the object and log `object_id` only | `OBJECT_INTEGRITY_FAILED`: TRUSTED→SUSPICIOUS trigger (single event) |
 | Rate-limit violation | Reject/throttle | Repeated violations → TRUSTED→SUSPICIOUS trigger |
 | Unauthorized object access | Reject | Logged; does not by itself escalate node trust state (this is an authorization event, not evidence the *node* is compromised — flag to M5 if you think this should also escalate) |
 | Any violation while SUSPICIOUS | Reject + escalate | → QUARANTINED |
@@ -475,7 +476,7 @@ If a TLS-terminating proxy ever enters the deployment, revisit this — that is 
 
 ### 10.1 What gets logged
 
-Every security-relevant decision point: authentication attempts (success **and** failure), authorization denials, session issuance/refresh/expiry **and revocation** (`session_revoked`), every trust-state transition (with trigger), rate-limit violations, nonce/replay detections, tampered-request detections, node registration events, quota breaches (`QuotaExceededError`), the transport-layer events B1 reports — `tls_handshake_failure`, `tls_certificate_rejected`, `envelope_malformed`, `timestamp_out_of_window`, `connection_force_closed` — and A1's node-local `secure_delete_failed`.
+Every security-relevant decision point: authentication attempts (success **and** failure), authorization denials, session issuance/refresh/expiry **and revocation** (`session_revoked`), every trust-state transition (with trigger), rate-limit violations, nonce/replay detections, tampered-request detections, node registration events, quota breaches (`QuotaExceededError`), the transport-layer events B1 reports — `tls_handshake_failure`, `tls_certificate_rejected`, `envelope_malformed`, `timestamp_out_of_window`, `connection_force_closed` — and A1's node-local `secure_delete_failed` and `object_integrity_failed`.
 
 ### 10.2 Entry format
 
@@ -507,7 +508,7 @@ Every security-relevant decision point: authentication attempts (success **and**
 | Member | Builds | Deliverable | Self-test |
 |---|---|---|---|
 | **M5** | Audit logger, log rotation, the hooks B1/A1 call to report their own detected events | `security/monitoring/audit.py` — `log_security_event(event_type, actor_id, severity, result, request_id, **extra)`, which writes the entry **and** feeds trust-state escalation (§6) internally | No line ever contains a raw token/credential/payload |
-| **A1** | Call M5's audit function for local security violations (e.g., integrity check failures) | Calls `log_security_event(...)` | Confirm `event_type` naming with M5 |
+| **A1** | Call M5's audit function for local security violations (e.g., integrity check failures) | Calls `log_security_event(...)` with `object_integrity_failed` for stored SHA-256 mismatches | Implemented; `OBJECT_INTEGRITY_FAILED` escalates once to SUSPICIOUS |
 | **B1** | Call M5's audit function for replay detections (§4), rate-limit violations (§5), and transport-layer events (§10.1) | Calls `log_security_event(...)` for each | Confirm `event_type` naming with M5 |
 
 **One call, not two.** `log_security_event` is the single entry point: it builds a `SecurityEvent`, appends the JSONL line, then evaluates `(event_type, actor_id)` against §6.4's transition table and escalates if it matches. Reporters never call an escalation function separately. The reason is the asymmetry of the failure modes — if logging and escalating were two calls, forgetting the second is a silent security hole while forgetting the first is just a missing log line, and only the hole shows up in an incident.
@@ -521,7 +522,7 @@ Every security-relevant decision point: authentication attempts (success **and**
 The escalation table (§6.4) is keyed on an identity record. Without one there is nothing to move, so a pre-auth flood is throttled and logged but changes no trust state. This matters because the alternative is not a no-op: a pre-auth counter reaching its threshold (§6.4) would otherwise try to move the trust state of an actor that does not exist — at best a junk record, at worst an escalation against an unrelated node. Anything that *should* escalate on a pre-auth flood must escalate the address by its own deliberate mechanism, never by letting this field carry an identity it does not have.
 
 ### 🔔 Request to A1 (B1 resolved)
-B1's transport event types are now in §10.1. **A1 — still open:** propose the `event_type` string values you'd emit for local security violations you detect, so M5 can add them to the fixed category list in §10.1.
+B1's transport event types and A1's node-local event types are listed in §10.1. `object_integrity_failed` is reserved for stored SHA-256 mismatches; `secure_delete_failed` remains a warning without trust escalation.
 
 ---
 

@@ -32,6 +32,7 @@ DEFAULT_SEVERITY: dict[EventType, Severity] = {
     EventType.ENROLLMENT_FAILED: Severity.WARNING,
     EventType.ENROLLMENT_DENIED: Severity.WARNING,
     EventType.SECURE_DELETE_FAILED: Severity.WARNING,
+    EventType.OBJECT_INTEGRITY_FAILED: Severity.CRITICAL,
     EventType.TLS_HANDSHAKE_FAILURE: Severity.INFO,
     EventType.ENVELOPE_MALFORMED: Severity.INFO,
     EventType.TIMESTAMP_OUT_OF_WINDOW: Severity.INFO,
