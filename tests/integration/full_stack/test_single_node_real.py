@@ -223,6 +223,11 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
                    for oid in placement_ids)
         }
         assert len(placements) == 3, f"allocations did not span three nodes: {placements}"
+        # Each node now holds this client's full 50% quota (8 MiB). Request
+        # one additional byte so placement has physical headroom and reaches
+        # the node-side quota check instead of failing scheduler capacity.
+        with pytest.raises(QuotaExceededError):
+            await client.alloc(1)
         node_logs_text = {
             i: (tmp_path / f"node-{i}.log").read_text(errors="replace")
             for i in range(1, 4)
@@ -293,9 +298,6 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         replay_response = await client.connection.call(replay)
         assert replay_response.WhichOneof("payload") == "error"
         assert replay_response.error.code == "AUTH_REJECTED"
-        with pytest.raises(QuotaExceededError):
-            await client.alloc(9 * 1024 * 1024)
-
         # A further authenticated-node security violation while quarantined
         # promotes the node to terminal revocation and closes its live stream.
         await _send_bad_node_refresh(port, cert_dir, target_index, target_node_identity)

@@ -137,4 +137,4 @@ def test_agreed_trust_effects():
     from common.types.security import SINGLE_EVENT_ESCALATORS
     assert EventType.OBJECT_INTEGRITY_FAILED in SINGLE_EVENT_ESCALATORS
     assert EventType.SECURE_DELETE_FAILED not in SINGLE_EVENT_ESCALATORS
-    assert EventType.AUTHZ_DENIED not in SINGLE_EVENT_ESCALATORSgit
+    assert EventType.AUTHZ_DENIED not in SINGLE_EVENT_ESCALATORS
