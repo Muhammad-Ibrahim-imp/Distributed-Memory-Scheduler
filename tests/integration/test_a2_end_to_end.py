@@ -82,7 +82,8 @@ async def test_revoked_objects_are_blocked_and_free_remains_available() -> None:
     await alice.write(node_b_id, b"other node")
 
     assert security.revoke_node("node-A", 42.0) == [[node_a_id]]
-    assert directory.get(node_a_id).state is ObjectState.REVOKED
+    assert directory.get(node_a_id).state is ObjectState.UNAVAILABLE
+    assert directory.get(node_a_id).unavailable_since == 42.0
     assert directory.get(node_b_id).state is ObjectState.ALLOCATED
     with pytest.raises(ObjectUnavailableError):
         await alice.read(node_a_id)
@@ -112,7 +113,7 @@ async def test_quarantine_recovers_but_revocation_is_permanent() -> None:
 
     manager.handle_node_revoked("node-R", 3.0)
     manager.handle_node_trust_state_changed("node-R", TrustState.TRUSTED, 4.0)
-    assert directory.get(revoked_id).state is ObjectState.REVOKED
+    assert directory.get(revoked_id).state is ObjectState.UNAVAILABLE
 
 
 async def test_node_failure_blocks_object_access_and_invalidates_cache() -> None:

@@ -36,12 +36,13 @@ def test_revocation_handler_unknown_node_is_noop() -> None:
 
 
 def test_revocation_handler_is_idempotent() -> None:
-    """Repeated revocation events leave the same objects revoked."""
+    """Repeated revocations keep objects unavailable at the first timestamp."""
     manager, directory = make_manager()
 
     assert manager.handle_node_revoked("node-1", 1.0) == ["obj-1"]
     assert manager.handle_node_revoked("node-1", 2.0) == ["obj-1"]
-    assert directory.get("obj-1").state is ObjectState.REVOKED
+    assert directory.get("obj-1").state is ObjectState.UNAVAILABLE
+    assert directory.get("obj-1").unavailable_since == 1.0
 
 
 def test_suspicious_state_preserves_allocated_objects() -> None:

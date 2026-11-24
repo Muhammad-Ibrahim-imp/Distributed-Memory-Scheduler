@@ -47,12 +47,12 @@ from dsm.directory.directory import Directory, ObjectRecord, ObjectState
 
 _NodeResult = TypeVar("_NodeResult")
 
-# SUSPICIOUS currently preserves existing objects as ALLOCATED; confirm this with M5.
+# SUSPICIOUS currently preserves existing objects as ALLOCATED.
 TRUST_TO_OBJECT_STATE: dict[TrustState, ObjectState] = {
     TrustState.TRUSTED: ObjectState.ALLOCATED,
     TrustState.SUSPICIOUS: ObjectState.ALLOCATED,
     TrustState.QUARANTINED: ObjectState.QUARANTINED,
-    TrustState.REVOKED: ObjectState.REVOKED,
+    TrustState.REVOKED: ObjectState.UNAVAILABLE,
 }
 
 
@@ -79,6 +79,9 @@ class AccessChecker(Protocol):
         object_id: str,
     ) -> bool:
         """Return whether an identity may perform an action on an object."""
+
+    def get_trust_state(self, node_id: str) -> TrustState:
+        """Return the node's current trust state."""
 
 
 @dataclass(frozen=True)
@@ -122,7 +125,7 @@ class ObjectManager:
         self.config = config
         self.node_timeout = float(node_timeout)
         self.cache = cache
-        self._revoked_node_ids: set[str] = set()
+        self._revoked_node_timestamps: dict[str, float] = {}
 
     async def _call_node(self, coro: Awaitable[_NodeResult]) -> _NodeResult:
         """Run a node operation with a deadline and normalize timeout errors."""
@@ -138,29 +141,27 @@ class ObjectManager:
         timestamp: float,
     ) -> list[str]:
         """Apply a node trust transition and return the affected object ids."""
-        del timestamp  # The Directory stores state, not transition timestamps.
         object_state = TRUST_TO_OBJECT_STATE[trust_state]
-        if object_state is ObjectState.REVOKED:
-            self._revoked_node_ids.add(node_id)
-        elif node_id in self._revoked_node_ids:
+        if trust_state is TrustState.REVOKED:
+            return self.handle_node_revoked(node_id, timestamp)
+        if node_id in self._revoked_node_timestamps:
             return []
 
         affected = self.directory.mark_node_state(node_id, object_state)
-        if self.cache is not None and object_state is ObjectState.REVOKED:
-            self.cache.invalidate_many(affected)
         return affected
 
     def handle_node_revoked(self, node_id: str, timestamp: float) -> list[str]:
-        """Handle M5's assumed revocation callback signature."""
-        return self.handle_node_trust_state_changed(
-            node_id,
-            TrustState.REVOKED,
-            timestamp,
-        )
+        """Mark objects unavailable after M5 has closed the node connection."""
+        self._revoked_node_timestamps.setdefault(node_id, timestamp)
+        revoked_at = self._revoked_node_timestamps[node_id]
+        affected = self.directory.mark_node_unavailable(node_id, revoked_at)
+        if self.cache is not None:
+            self.cache.invalidate_many(affected)
+        return affected
 
     def handle_node_failure(self, node_id: str) -> list[str]:
         """Mark a failed node's objects unavailable and evict their cache entries."""
-        if node_id in self._revoked_node_ids:
+        if node_id in self._revoked_node_timestamps:
             return []
         affected = self.directory.mark_node_failed(node_id)
         if self.cache is not None:
@@ -234,9 +235,12 @@ class ObjectManager:
                     state=ObjectState.ALLOCATED,
                 )
             )
-            if decision.node_id in self._revoked_node_ids:
+            if decision.node_id in self._revoked_node_timestamps:
                 # A placement already in flight must not escape a completed revocation.
-                self.directory.mark_node_state(decision.node_id, ObjectState.REVOKED)
+                self.directory.mark_node_unavailable(
+                    decision.node_id,
+                    self._revoked_node_timestamps[decision.node_id],
+                )
             return object_id
 
         if last_error is None:
@@ -262,7 +266,10 @@ class ObjectManager:
         ):
             raise NotOwnerError("caller is not the object owner")
 
-        if record.state in (ObjectState.UNAVAILABLE, ObjectState.REVOKED):
+        if (
+            record.state in (ObjectState.UNAVAILABLE, ObjectState.REVOKED)
+            or self.security.get_trust_state(record.node_id) is TrustState.REVOKED
+        ):
             raise ObjectUnavailableError("object is on an unavailable node")
 
         if self.cache is not None:
@@ -343,6 +350,11 @@ class ObjectManager:
                 ObjectState.REVOKED,
             ):
                 raise ObjectUnavailableError("object is not writable in its current state")
+            trust_state = self.security.get_trust_state(record.node_id)
+            if trust_state in (TrustState.QUARANTINED, TrustState.REVOKED):
+                raise ObjectUnavailableError(
+                    "object is not writable in its node's current trust state"
+                )
             if len(data) > record.size:
                 raise InvalidRequestError("data exceeds the allocated size")
 
@@ -395,7 +407,12 @@ class ObjectManager:
                 return
 
             # Assumption pending M5 confirmation: an authorized free is allowed in every state.
-            if record.state is not ObjectState.REVOKED:
+            is_revoked = (
+                record.state is ObjectState.REVOKED
+                or record.node_id in self._revoked_node_timestamps
+                or self.security.get_trust_state(record.node_id) is TrustState.REVOKED
+            )
+            if not is_revoked:
                 await self._call_node(
                     self.node_client.free(
                         ctx,

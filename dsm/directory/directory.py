@@ -31,6 +31,7 @@ class ObjectRecord:
     # bumped on every write; versioning is A2's job, not A1's node
     version: int = 0
     state: ObjectState = ObjectState.ALLOCATED
+    unavailable_since: float | None = None
 
 
 class Directory:
@@ -86,12 +87,24 @@ class Directory:
 
     def mark_node_state(self, node_id: str, state: ObjectState) -> list[str]:
         # set the state of every object on a node and return their ids
-        # the revocation handler calls this with REVOKED or QUARANTINED
-        # calling it with ALLOCATED restores them if the node becomes trusted again
+        # calling it with ALLOCATED restores objects after trust recovery
         affected = []
         for record in self._records.values():
             if record.node_id == node_id:
-                record.state = state               # same record object, so version and lock are kept
+                record.state = state
+                if state is ObjectState.ALLOCATED:
+                    record.unavailable_since = None
+                affected.append(record.object_id)
+        return affected
+
+    def mark_node_unavailable(self, node_id: str, timestamp: float) -> list[str]:
+        """Mark every object on a revoked node unavailable at the given time."""
+        affected = []
+        for record in self._records.values():
+            if record.node_id == node_id:
+                record.state = ObjectState.UNAVAILABLE
+                if record.unavailable_since is None:
+                    record.unavailable_since = timestamp
                 affected.append(record.object_id)
         return affected
 

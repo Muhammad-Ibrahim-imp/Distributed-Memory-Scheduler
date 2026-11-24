@@ -26,8 +26,8 @@ class NotOwnerError(DSMError):
 
 
 class ObjectUnavailableError(DSMError):
-    """The object's node is REVOKED, or a write targets an object on a
-    QUARANTINED node. Retrying will not help."""
+    """The object's node is unavailable or revoked, or a write targets an
+    object on a QUARANTINED node. Retrying will not help."""
 
 
 class OutOfCapacityError(DSMError):
