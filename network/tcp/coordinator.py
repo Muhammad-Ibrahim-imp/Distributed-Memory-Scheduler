@@ -6,6 +6,7 @@ import ssl
 from common.protocol import dsm_pb2
 from common.types.errors import ObjectNotFoundError, TokenExpiredError, TokenInvalidError, DSMError
 from common.types.context import RequestContext
+from common.types.generation import CoordinatorGeneration
 from common.types.security import EventType, Result, Severity, TrustState
 from network.tcp.connection import Connection, DEFAULT_TIMEOUT
 from network.tcp.registry import NodeRegistry
@@ -18,7 +19,8 @@ from security.authentication.registration import Role
 
 class CoordinatorServer:
     def __init__(self, host, port, auth_service, runtime, registry=None, trust=None, audit=None,
-                 enrollment: EnrollmentGuard | None = None):
+                 enrollment: EnrollmentGuard | None = None,
+                 generation: CoordinatorGeneration | None = None):
         if enrollment is None:
             raise ValueError("EnrollmentGuard is required")
         self.host, self.port = host, port
@@ -28,6 +30,15 @@ class CoordinatorServer:
         self.trust = trust
         self.audit = audit
         self.enrollment = enrollment
+        self.generation = generation or CoordinatorGeneration.create()
+        runtime_generation = getattr(
+            getattr(runtime, "object_manager", None), "coordinator_generation", None
+        )
+        if runtime_generation != self.generation.value:
+            activate = getattr(runtime, "start_generation", None)
+            if not callable(activate):
+                raise ValueError("runtime must support coordinator generation activation")
+            activate(self.generation.value)
         
         # Main post-auth rate limiter
         self.rate_limit = RateLimiter()
@@ -41,7 +52,7 @@ class CoordinatorServer:
     async def start(self):
         from network.security.tls import server_context
         self._server = await asyncio.start_server(self._accept, self.host, self.port, ssl=server_context())
-        print(f"[coordinator] listening on {self.host}:{self.port}")
+        print(f"[coordinator] listening on {self.host}:{self.port} generation={self.generation.value}")
 
     async def stop(self):
         if self._server:
@@ -90,7 +101,7 @@ class CoordinatorServer:
             await self._handle_register(env, conn, cert_fingerprint, peer_ip)
             return
         elif field == "refresh":
-            await self._handle_refresh(env, conn)
+            await self._handle_refresh(env, conn, cert_fingerprint)
             return
         elif field == "node_stats":
             self.registry.set_stats(env.node_stats.node_id, env.node_stats)
@@ -145,8 +156,8 @@ class CoordinatorServer:
             if field == "alloc":
                 obj_id = await dsm.alloc(env.alloc.size)
                 resp = dsm_pb2.Envelope()
-                resp.alloc_response.request_id = rid
-                resp.alloc_response.object_id = obj_id
+                resp.allocate_response.request_id = rid
+                resp.allocate_response.object_id = obj_id
             elif field == "read":
                 data = await dsm.read(env.read.object_id)
                 resp = dsm_pb2.Envelope()
@@ -171,7 +182,8 @@ class CoordinatorServer:
         rid = env.register.request_id
         try:
             role = self.enrollment.authorize(
-                env.register.role, env.register.enrollment_secret, cert_fingerprint
+                env.register.role, env.register.enrollment_secret, cert_fingerprint,
+                env.register.label,
             )
         except EnrollmentDenied:
             await self._audit(
@@ -182,7 +194,10 @@ class CoordinatorServer:
             return
 
         try:
-            result = self.auth_service.register(role, env.register.label, rid)
+            result = self.auth_service.register(
+                role, env.register.label, rid,
+                certificate_fingerprint=cert_fingerprint if role is Role.NODE else None,
+            )
             if role is Role.NODE:
                 self.enrollment.bind_node(result.identity, cert_fingerprint)
             resp = dsm_pb2.Envelope()
@@ -196,7 +211,7 @@ class CoordinatorServer:
         except Exception as exc:
             await self._send_error(conn, env, "INVALID_REQUEST", str(exc))
 
-    async def _handle_refresh(self, env, conn):
+    async def _handle_refresh(self, env, conn, cert_fingerprint):
         """Credential -> fresh token (policy section 3.3). Pre-auth message."""
         rid = env.refresh.request_id
         try:
@@ -206,6 +221,16 @@ class CoordinatorServer:
         except Exception:
             await self._send_error(conn, env, "AUTH_REJECTED", "authentication failed")
             return
+        if result.role is Role.NODE:
+            try:
+                self.enrollment.authorize_node_reconnect(result.identity, cert_fingerprint)
+            except Exception:
+                await self._audit("enrollment_denied", env, "rejected", reason="node_certificate_denied")
+                await self._send_error(conn, env, "AUTH_REJECTED", "node certificate denied")
+                return
+        self._connections[result.identity] = conn
+        if result.role is Role.NODE:
+            self.registry.register(result.identity, conn)
         resp = dsm_pb2.Envelope()
         resp.refresh_response.request_id = rid
         resp.refresh_response.token = result.token

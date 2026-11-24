@@ -475,26 +475,26 @@ class ObjectManager:
             if record is None:
                 return
 
-            # Assumption pending M5 confirmation: an authorized free is allowed in every state.
             is_revoked = (
                 record.state is ObjectState.REVOKED
                 or record.node_id in self._revoked_node_timestamps
                 or self.security.get_trust_state(record.node_id) is TrustState.REVOKED
             )
-            if not is_revoked:
-                try:
-                    await self._call_node(
-                        self.node_client.free(
-                            ctx,
-                            record.node_id,
-                            object_id,
-                            record.owner_identity,
-                        )
+            if is_revoked:
+                raise ObjectUnavailableError("objects on revoked nodes cannot be freed")
+            try:
+                await self._call_node(
+                    self.node_client.free(
+                        ctx,
+                        record.node_id,
+                        object_id,
+                        record.owner_identity,
                     )
-                except BaseException:
-                    if self.cache is not None:
-                        self.cache.invalidate(object_id)
-                    raise
+                )
+            except BaseException:
+                if self.cache is not None:
+                    self.cache.invalidate(object_id)
+                raise
 
             self.directory.remove(object_id)
             if self.cache is not None:

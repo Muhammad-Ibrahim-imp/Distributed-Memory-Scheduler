@@ -73,8 +73,8 @@ async def test_handles_cannot_read_write_or_free_another_identity_object() -> No
     assert await alice.read(object_id) == b"owned"
 
 
-async def test_revoked_objects_are_blocked_and_free_remains_available() -> None:
-    """Revocation affects one node and an owner can still release its object."""
+async def test_revoked_objects_reject_free_and_preserve_directory_metadata() -> None:
+    """Revoked state denies every DSM operation and retains local metadata."""
     runtime, directory, security, _ = make_runtime(["node-A", "node-B"])
     alice = runtime.bind("alice")
     node_a_id = await alice.alloc(16)
@@ -90,8 +90,9 @@ async def test_revoked_objects_are_blocked_and_free_remains_available() -> None:
     with pytest.raises(ObjectUnavailableError):
         await alice.write(node_a_id, b"blocked")
 
-    await alice.free(node_a_id)
-    assert directory.get(node_a_id) is None
+    with pytest.raises(ObjectUnavailableError):
+        await alice.free(node_a_id)
+    assert directory.get(node_a_id) is not None
     assert await alice.read(node_b_id) == b"other node"
 
 

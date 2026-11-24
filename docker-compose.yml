@@ -1,15 +1,28 @@
+x-node-environment: &node-environment
+  SERVICE_ROLE: node
+  SECURITY_HOST: coordinator
+  SECURITY_PORT: "8443"
+  DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
+
+x-node-common: &node-common
+  build: .
+  command: python scripts/node_main.py
+  mem_limit: 512m
+  depends_on: [coordinator]
+  networks: [dsm-net]
+
 services:
   coordinator:
     build: .
     command: python scripts/coordinator_main.py
     environment:
       SERVICE_ROLE: coordinator
+      SECURITY_HOST: 0.0.0.0
       SECURITY_PORT: "8443"
-      DSM_TOKEN_KEY: ${DSM_TOKEN_KEY:-}      
+      DSM_TOKEN_KEY: ${DSM_TOKEN_KEY:?set DSM_TOKEN_KEY in .env}
       DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
       DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:?set DSM_CLIENT_ENROLLMENT_SECRET in .env}
-    ports:
-      - "8443:8443"
+    ports: ["8443:8443"]
     volumes:
       - ./configs:/app/configs:ro
       - ./certs/ca.pem:/app/certs/ca.pem:ro
@@ -18,24 +31,41 @@ services:
       - coordinator-data:/app/data
     networks: [dsm-net]
 
-  node:
-    build: .
-    command: python scripts/node_main.py
+  node-1:
+    <<: *node-common
     environment:
-      SERVICE_ROLE: node
-      SECURITY_HOST: coordinator
-      SECURITY_PORT: "8443"
-      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
-      NODE_ID: "node-1"
+      <<: *node-environment
+      NODE_ID: node-1
       DSM_NODE_CERT_FILE: /app/certs/nodes/node-1.pem
       DSM_NODE_KEY_FILE: /app/certs/nodes/node-1.key
     volumes:
       - ./certs/ca.pem:/app/certs/ca.pem:ro
       - ./certs/nodes/node-1.pem:/app/certs/nodes/node-1.pem:ro
       - ./certs/nodes/node-1.key:/app/certs/nodes/node-1.key:ro
-    mem_limit: 512m
-    depends_on: [coordinator]
-    networks: [dsm-net]
+
+  node-2:
+    <<: *node-common
+    environment:
+      <<: *node-environment
+      NODE_ID: node-2
+      DSM_NODE_CERT_FILE: /app/certs/nodes/node-2.pem
+      DSM_NODE_KEY_FILE: /app/certs/nodes/node-2.key
+    volumes:
+      - ./certs/ca.pem:/app/certs/ca.pem:ro
+      - ./certs/nodes/node-2.pem:/app/certs/nodes/node-2.pem:ro
+      - ./certs/nodes/node-2.key:/app/certs/nodes/node-2.key:ro
+
+  node-3:
+    <<: *node-common
+    environment:
+      <<: *node-environment
+      NODE_ID: node-3
+      DSM_NODE_CERT_FILE: /app/certs/nodes/node-3.pem
+      DSM_NODE_KEY_FILE: /app/certs/nodes/node-3.key
+    volumes:
+      - ./certs/ca.pem:/app/certs/ca.pem:ro
+      - ./certs/nodes/node-3.pem:/app/certs/nodes/node-3.pem:ro
+      - ./certs/nodes/node-3.key:/app/certs/nodes/node-3.key:ro
 
   client:
     build: .

@@ -17,6 +17,7 @@ from network.tcp.bandwidth_probe import BandwidthProbe
 from network.tcp.network_state import RegistryNetworkStateProvider
 from network.tcp.resource_state import RegistryResourceProvider
 from common.types.security import EventType, Result, Severity
+from common.types.generation import CoordinatorGeneration
 
 # A2's Runtime and Directory
 from dsm.runtime import Runtime
@@ -52,6 +53,9 @@ class SecurityWrapper:
     def register_revocation_listener(self, callback):
         self._trust.register_revocation_listener(callback)
 
+    def get_trust_state(self, node_id):
+        return self._trust.get_trust_state(node_id)
+
     def __getattr__(self, name):
         return getattr(self._core, name)
 
@@ -82,7 +86,7 @@ async def main():
     port = int(os.environ.get("SECURITY_PORT", 8443))
 
     # 1. M5 Security
-    security_config = load_security_config("configs/security.yaml")
+    security_config = load_security_config(os.environ.get("DSM_SECURITY_CONFIG", "configs/security.yaml"))
     if security_config.persistence.backend != "sqlite":
         raise SecurityPersistenceError("unsupported security persistence backend")
     database = SecurityDatabase(security_config.persistence.database_path)
@@ -111,22 +115,28 @@ async def main():
     sec_provider = trust_state
     node_provider = DynamicNodeProvider(registry, res_provider, net_provider, sec_provider)
 
-    config = load_scheduler_config("configs/scheduler.json")
+    config = load_scheduler_config(os.environ.get("DSM_SCHEDULER_CONFIG", "configs/scheduler.json"))
     scheduler = create_scheduler(config, node_state_provider=node_provider, security_provider=sec_provider)
 
     # 5. A2 Runtime
+    generation = CoordinatorGeneration.create()
     runtime = Runtime(
         directory=directory,
         node_client=node_client,
         scheduler=scheduler,
         security=sec_wrapper,
+        coordinator_generation=generation.value,
     )
+    # B1's transport must unregister a node on confirmed connection loss;
+    # A2 then marks its Directory objects unavailable and evicts cache entries.
+    registry.on_node_down(runtime.object_manager.handle_node_failure)
 
     # 6. B1 Server
     server = CoordinatorServer(
         host=host, port=port, auth_service=core.auth,
         runtime=runtime, registry=registry, trust=sec_provider, audit=core.audit,
         enrollment=enrollment,
+        generation=generation,
     )
 
     # 7. TLS Error Handler

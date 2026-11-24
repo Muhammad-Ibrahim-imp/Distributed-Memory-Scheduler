@@ -16,8 +16,8 @@ Trust state (policy §6.3) -- what the runtime checks before each call:
   TRUSTED / SUSPICIOUS   read, write and free all allowed
   QUARANTINED            read and free allowed; write raises
                          ObjectUnavailableError
-  REVOKED                reads/writes raise ObjectUnavailableError; free drops
-                         local metadata without contacting the revoked node
+  REVOKED                read, write and free raise ObjectUnavailableError;
+                         retain local metadata for generation-aware cleanup
   Placement is B2's decision -- the runtime never chooses a node. The runtime
   takes the trust-state reader as an injected dependency and calls
   get_trust_state(node_id) duck-typed, so it is not bound to M5's
@@ -81,8 +81,9 @@ class DSMAPI(Protocol):
         client's allocations and its quota forever with no way to clean up.
         Policy §6.3's "reads only" blocks content writes, not release.
 
-        On REVOKED the remote node is not contacted; local metadata is dropped
-        because cleanup cannot be performed through the revoked connection.
+        REVOKED denies free as well as reads and writes, per SECURITY_POLICY.md
+        section 6.3. Keep local metadata until generation cleanup can safely
+        reclaim the revoked node's allocation.
 
         Raises only: NotOwnerError, ObjectUnavailableError, InvalidRequestError,
         or pipeline errors.

@@ -18,13 +18,41 @@ class SecurityRepository:
         ).fetchall())
         return [Identity(row[0], row[1], Role(row[2]), row[3], row[4], bool(row[5])) for row in rows]
 
-    def save_identity(self, identity: Identity) -> None:
-        self.database.run(lambda db: db.execute(
-            "INSERT INTO identities(identity,label,role,credential_hash,created_at,revoked) "
-            "VALUES(?,?,?,?,?,?)",
-            (identity.identity, identity.label, identity.role.value, identity.credential_hash,
-             identity.created_at, int(identity.revoked)),
-        ))
+    def save_identity(self, identity: Identity, certificate_fingerprint: str | None = None) -> None:
+        def write(db):
+            db.execute(
+                "INSERT INTO identities(identity,label,role,credential_hash,created_at,revoked) "
+                "VALUES(?,?,?,?,?,?)",
+                (identity.identity, identity.label, identity.role.value, identity.credential_hash,
+                 identity.created_at, int(identity.revoked)),
+            )
+            if certificate_fingerprint is not None:
+                if identity.role is not Role.NODE:
+                    raise ValueError("only node identities can be certificate-bound")
+                db.execute(
+                    "INSERT INTO node_certificates(identity,fingerprint,enrolled_at) VALUES(?,?,?)",
+                    (identity.identity, certificate_fingerprint, identity.created_at),
+                )
+        self.database.run(write)
+
+    def get_node_certificate(self, identity: str) -> str | None:
+        row = self.database.run(lambda db: db.execute(
+            "SELECT fingerprint FROM node_certificates WHERE identity=?", (identity,)
+        ).fetchone())
+        return row[0] if row else None
+
+    def get_node_identity_for_certificate(self, fingerprint: str) -> str | None:
+        row = self.database.run(lambda db: db.execute(
+            "SELECT identity FROM node_certificates WHERE fingerprint=?", (fingerprint,)
+        ).fetchone())
+        return row[0] if row else None
+
+    def get_node_identity_for_label(self, label: str) -> str | None:
+        row = self.database.run(lambda db: db.execute(
+            "SELECT identity FROM identities WHERE role=? AND label=? LIMIT 1",
+            (Role.NODE.value, label),
+        ).fetchone())
+        return row[0] if row else None
 
     def set_identity_revoked(self, identity: str) -> bool:
         def write(db):

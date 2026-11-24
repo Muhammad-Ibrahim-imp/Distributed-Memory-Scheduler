@@ -44,7 +44,8 @@ class EnrollmentGuard:
                 repository.add_ban(fingerprint, "node_certificate", time.time(), "legacy_denylist")
         self._fingerprints_by_identity: dict[str, str] = {}
 
-    def authorize(self, role: Role | str, secret: str, cert_fingerprint: str) -> Role:
+    def authorize(self, role: Role | str, secret: str, cert_fingerprint: str,
+                  label: str | None = None) -> Role:
         try:
             role = Role(role)
         except ValueError as exc:
@@ -57,13 +58,36 @@ class EnrollmentGuard:
             if (fingerprint in self._denied_fingerprints or
                     (self._repository is not None and self._repository.has_ban(fingerprint, "node_certificate"))):
                 raise EnrollmentDenied
+            if (self._repository is not None and
+                    self._repository.get_node_identity_for_certificate(fingerprint) is not None):
+                raise EnrollmentDenied
+            if (self._repository is not None and label and
+                    self._repository.get_node_identity_for_label(label) is not None):
+                raise EnrollmentDenied
         return role
 
     def bind_node(self, identity: str, cert_fingerprint: str) -> None:
-        self._fingerprints_by_identity[identity] = self._normalize_fingerprint(cert_fingerprint)
+        fingerprint = self._normalize_fingerprint(cert_fingerprint)
+        if self._repository is not None and self._repository.get_node_certificate(identity) != fingerprint:
+            raise EnrollmentDenied
+        self._fingerprints_by_identity[identity] = fingerprint
+
+    def authorize_node_reconnect(self, identity: str, cert_fingerprint: str) -> None:
+        """Reject banned or changed node certificates during credential refresh."""
+        fingerprint = self._normalize_fingerprint(cert_fingerprint)
+        if (fingerprint in self._denied_fingerprints or
+                (self._repository is not None and
+                 self._repository.has_ban(fingerprint, "node_certificate"))):
+            raise EnrollmentDenied
+        bound = (self._repository.get_node_certificate(identity) if self._repository is not None
+                 else self._fingerprints_by_identity.get(identity))
+        if bound is None or not hmac.compare_digest(bound, fingerprint):
+            raise EnrollmentDenied
+        self._fingerprints_by_identity[identity] = fingerprint
 
     def record_revocation(self, identity: str, _timestamp: float) -> None:
-        fingerprint = self._fingerprints_by_identity.get(identity)
+        fingerprint = (self._repository.get_node_certificate(identity) if self._repository is not None
+                       else self._fingerprints_by_identity.get(identity))
         if fingerprint is None or fingerprint in self._denied_fingerprints:
             return
         denied = self._denied_fingerprints | {fingerprint}

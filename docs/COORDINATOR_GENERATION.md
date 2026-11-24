@@ -29,6 +29,8 @@ objects unavailable and invalidates their cached values; trust transitions
 continue to apply the existing quarantine/revocation policy. A failed write
 does not advance the version and invalidates the cache. A failed free retains
 Directory/version metadata for retry and invalidates cached bytes.
+Free is denied for a revoked node by SECURITY_POLICY.md section 6.3; its
+Directory metadata remains until generation-aware cleanup can safely reclaim it.
 Network integrations must distinguish temporary disconnection from confirmed
 node failure and call `handle_node_failure()` only for the latter.
 

@@ -1,5 +1,6 @@
 import asyncio
 import time
+from contextlib import suppress
 
 from common.protocol import dsm_pb2
 from common.types.context import RequestContext
@@ -12,10 +13,11 @@ from network.tcp.errors import error_to_code
 class NodeService:
     def __init__(self, host, port, label, enrollment_secret, memory_node,
                  heartbeat_interval: float = 5.0, client_cert=None, client_key=None,
-                 event_queue=None):
+                 event_queue=None, server_hostname: str = "coordinator"):
         self.host, self.port = host, port
         self.label, self.enrollment_secret = label, enrollment_secret
         self.client_cert, self.client_key = client_cert, client_key
+        self.server_hostname = server_hostname
         self.event_queue = event_queue
         self.memory_node = memory_node
         self.heartbeat_interval = heartbeat_interval
@@ -36,19 +38,39 @@ class NodeService:
         reader, writer = await asyncio.open_connection(
             self.host, self.port,
             ssl=client_context(self.client_cert, self.client_key),
-            server_hostname="coordinator",
+            server_hostname=self.server_hostname,
         )
         conn = Connection(reader, writer)
         conn.set_handler(self._handle)
         conn.start()
         self.connection = conn
-        await self._register(conn)
+        if self.identity and self.credential:
+            await self._refresh(conn)
+        else:
+            await self._register(conn)
         hb = asyncio.create_task(self._heartbeat_loop())
+        stopped = asyncio.create_task(self._stop.wait())
         try:
-            await self._stop.wait()
+            await asyncio.wait((stopped, conn._reader_task), return_when=asyncio.FIRST_COMPLETED)
         finally:
+            stopped.cancel()
+            with suppress(asyncio.CancelledError):
+                await stopped
             hb.cancel()
             await conn.close()
+
+    async def _refresh(self, conn: Connection):
+        env = dsm_pb2.Envelope()
+        env.protocol_version = 1
+        env.timestamp = time.time()
+        env.refresh.request_id = f"refresh-{time.time_ns()}"
+        env.refresh.identity = self.identity or ""
+        env.refresh.credential = self.credential or ""
+        resp = await conn.call(env)
+        if resp.WhichOneof("payload") == "error":
+            raise ConnectionError(f"reauthentication failed: {resp.error.message}")
+        self.token = resp.refresh_response.token
+        print(f"[node] reauthenticated as {self.identity}")
 
     async def _register(self, conn: Connection):
         env = dsm_pb2.Envelope()
