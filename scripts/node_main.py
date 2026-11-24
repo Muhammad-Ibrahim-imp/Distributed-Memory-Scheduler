@@ -16,6 +16,8 @@ async def main():
     host = os.environ.get("SECURITY_HOST", "coordinator")
     port = int(os.environ.get("SECURITY_PORT", 8443))
     secret = os.environ.get("DSM_NODE_ENROLLMENT_SECRET", "")
+    node_cert = os.environ.get("DSM_NODE_CERT_FILE", f"certs/nodes/{node_id}.pem")
+    node_key = os.environ.get("DSM_NODE_KEY_FILE", f"certs/nodes/{node_id}.key")
 
     # Headroom settings from A1 (defaults: 10% and 128 MiB)
     headroom_fraction = float(os.environ.get("NODE_HEADROOM_FRACTION", 0.10))
@@ -55,7 +57,8 @@ async def main():
     service = NodeService(
         host=host, port=port, label=node_id,
         enrollment_secret=secret, memory_node=memory_node,
-        event_queue=event_queue
+        event_queue=event_queue,
+        client_cert=node_cert, client_key=node_key,
     )
     
     print(f"[node] starting {node_id} targeting {host}:{port}")

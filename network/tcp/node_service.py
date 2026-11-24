@@ -11,9 +11,12 @@ from network.tcp.errors import error_to_code
 
 class NodeService:
     def __init__(self, host, port, label, enrollment_secret, memory_node,
-                 heartbeat_interval: float = 5.0):
+                 heartbeat_interval: float = 5.0, client_cert=None, client_key=None,
+                 event_queue=None):
         self.host, self.port = host, port
         self.label, self.enrollment_secret = label, enrollment_secret
+        self.client_cert, self.client_key = client_cert, client_key
+        self.event_queue = event_queue
         self.memory_node = memory_node
         self.heartbeat_interval = heartbeat_interval
         self.identity: str | None = None
@@ -31,7 +34,9 @@ class NodeService:
 
     async def _connect_and_serve(self):
         reader, writer = await asyncio.open_connection(
-            self.host, self.port, ssl=client_context(), server_hostname="coordinator"
+            self.host, self.port,
+            ssl=client_context(self.client_cert, self.client_key),
+            server_hostname="coordinator",
         )
         conn = Connection(reader, writer)
         conn.set_handler(self._handle)

@@ -12,16 +12,22 @@ from network.tcp.registry import NodeRegistry
 from network.security.rate_limit import RateLimiter
 from network.security.replay import ReplayGuard
 from network.tcp.errors import error_to_code
+from security.authentication.enrollment import EnrollmentDenied, EnrollmentGuard
+from security.authentication.registration import Role
 
 
 class CoordinatorServer:
-    def __init__(self, host, port, auth_service, runtime, registry=None, trust=None, audit=None):
+    def __init__(self, host, port, auth_service, runtime, registry=None, trust=None, audit=None,
+                 enrollment: EnrollmentGuard | None = None):
+        if enrollment is None:
+            raise ValueError("EnrollmentGuard is required")
         self.host, self.port = host, port
         self.auth_service = auth_service
         self.runtime = runtime
         self.registry = registry or NodeRegistry()
         self.trust = trust
         self.audit = audit
+        self.enrollment = enrollment
         
         # Main post-auth rate limiter
         self.rate_limit = RateLimiter()
@@ -81,7 +87,7 @@ class CoordinatorServer:
                 return
 
         if field == "register":
-            await self._handle_register(env, conn, cert_fingerprint)
+            await self._handle_register(env, conn, cert_fingerprint, peer_ip)
             return
         elif field == "refresh":
             await self._handle_refresh(env, conn)
@@ -161,17 +167,31 @@ class CoordinatorServer:
             code = error_to_code(exc) if isinstance(exc, DSMError) else "INVALID_REQUEST"
             await self._send_error(conn, env, code, str(exc))
 
-    async def _handle_register(self, env, conn, cert_fingerprint):
+    async def _handle_register(self, env, conn, cert_fingerprint, peer_ip):
         rid = env.register.request_id
         try:
-            result = self.auth_service.register(env.register.role, env.register.label, rid)
+            role = self.enrollment.authorize(
+                env.register.role, env.register.enrollment_secret, cert_fingerprint
+            )
+        except EnrollmentDenied:
+            await self._audit(
+                "enrollment_denied", env, "rejected", actor_id=f"ip:{peer_ip}",
+                reason="registration_denied",
+            )
+            await self._send_error(conn, env, "AUTH_REJECTED", "registration denied")
+            return
+
+        try:
+            result = self.auth_service.register(role, env.register.label, rid)
+            if role is Role.NODE:
+                self.enrollment.bind_node(result.identity, cert_fingerprint)
             resp = dsm_pb2.Envelope()
             resp.register_response.request_id = rid
             resp.register_response.identity = result.identity
             resp.register_response.credential = result.credential
             await conn.send(resp)
             self._connections[result.identity] = conn
-            if env.register.role == "node":
+            if role is Role.NODE:
                 self.registry.register(result.identity, conn)
         except Exception as exc:
             await self._send_error(conn, env, "INVALID_REQUEST", str(exc))

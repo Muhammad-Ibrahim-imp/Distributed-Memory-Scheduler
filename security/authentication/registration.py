@@ -40,17 +40,22 @@ _DUMMY_HASH = hash_credential("dummy-credential-for-the-unknown-identity-path")
 
 
 class IdentityStore:
-    """In-memory (persistence arrives with Week-5 node registration)."""
+    """Identity cache backed by the coordinator security repository when configured."""
 
-    def __init__(self, clock: Callable[[], float] = time.time):
+    def __init__(self, clock: Callable[[], float] = time.time, repository=None):
         self._clock = clock
+        self._repository = repository
         self._by_id: dict[str, Identity] = {}
+        if repository is not None:
+            self._by_id = {i.identity: i for i in repository.load_identities()}
 
     def register(self, role: Role | str, label: str) -> tuple[str, str]:
         """Policy signature: register(role, label) -> (identity, credential)."""
         credential = secrets.token_urlsafe(32)
         ident = Identity(str(uuid.uuid4()), label, Role(role), hash_credential(credential),
                          self._clock())
+        if self._repository is not None:
+            self._repository.save_identity(ident)
         self._by_id[ident.identity] = ident
         return ident.identity, credential
 
@@ -67,6 +72,8 @@ class IdentityStore:
     def mark_revoked(self, identity: str) -> bool:
         ident = self._by_id.get(identity)
         if ident is None:
+            return False
+        if self._repository is not None and not self._repository.set_identity_revoked(identity):
             return False
         ident.revoked = True
         return True

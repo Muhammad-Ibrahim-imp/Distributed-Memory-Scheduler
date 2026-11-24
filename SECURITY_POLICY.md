@@ -454,6 +454,8 @@ Rules for both:
 
 **Why this is an exception rather than a hole:** both messages are inherently unauthenticated, so their only defences are the enrollment secret and the IP-keyed limiter. Neither grants access to DSM data — `Register` mints an identity, and `Refresh` re-mints a token only for a credential that is still checked against its stored hash (§3.2).
 
+**Enrollment implementation:** the coordinator requires the role-specific enrollment secret (minimum 32 bytes, compared in constant time). Node registrations also require a unique per-node TLS client certificate. The coordinator keys the revocation denylist by the certificate's SHA-256 fingerprint, persists it in `data/denylist.json` on REVOKED, and rejects that certificate on later registration even when the shared secret is correct. Generate additional dev node certificates with `python scripts/gen_certs.py --issue-node <node-id>`; never reuse one node certificate across machines.
+
 ### 9.4 Tamper detection lives in verify_token, not in a payload hash
 
 Worth stating explicitly because it is the obvious thing to build twice. Three mechanisms could appear to detect tampering:
@@ -615,6 +617,8 @@ M5 does **not** build: TLS/sockets/nonce-tracking/rate-limit enforcement (B1), n
 | All | **Open:** whether the session registry must persist across coordinator restarts, or a 300 s re-authentication after restart is acceptable (§3.7) |
 
 ---
+
+**Enrollment status:** the M5 enrollment gate, stable certificate fingerprint binding, and persistent denylist are implemented. Each deployment must provision unique node certificates and supply the two role secrets out of band.
 
 ## 15. Testing Levels This Document Feeds
 

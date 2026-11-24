@@ -29,13 +29,14 @@ class SecurityCore:
 def build_security_core(config: SecurityConfig | None = None, config_path: str | Path | None = None,
                         clock: Callable[[], float] = time.time,
                         trust: TrustStateReader | None = None,
-                        set_default_audit: bool = False) -> SecurityCore:
+                        set_default_audit: bool = False,
+                        repository=None) -> SecurityCore:
     cfg = config or load_security_config(config_path)
-    audit = AuditLogger(cfg.audit.path, cfg.audit.max_bytes, cfg.audit.backup_count, clock)
+    audit = AuditLogger(cfg.audit.path, cfg.audit.max_bytes, cfg.audit.backup_count, clock, repository)
     if set_default_audit:
         audit_module.configure(audit)       # lets A1/B1 call audit.log_security_event(...)
     sessions = SessionManager(cfg.token.ttl_seconds, clock=clock, audit=audit)
     tokens = TokenService(cfg.token_key, cfg.token.ttl_seconds, clock)
-    identities = IdentityStore(clock)
+    identities = IdentityStore(clock, repository)
     auth = AuthService(identities, sessions, tokens, audit, trust)
     return SecurityCore(cfg, identities, sessions, tokens, audit, auth)

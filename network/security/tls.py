@@ -13,9 +13,10 @@ def server_context() -> ssl.SSLContext:
     return ctx
 
 
-def client_context() -> ssl.SSLContext:
+def client_context(certfile: str | Path | None = None,
+                   keyfile: str | Path | None = None) -> ssl.SSLContext:
     ctx = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-    ctx.load_cert_chain(CERTS / "client.pem", CERTS / "client.key")
+    ctx.load_cert_chain(certfile or CERTS / "client.pem", keyfile or CERTS / "client.key")
     ctx.load_verify_locations(CERTS / "ca.pem")
     ctx.check_hostname = True
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2

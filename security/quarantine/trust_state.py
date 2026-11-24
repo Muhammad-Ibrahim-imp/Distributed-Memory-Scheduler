@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import time
+import uuid
 from collections import defaultdict, deque
 from collections.abc import Callable
 from typing import Any
@@ -13,31 +14,65 @@ from common.types.security import (
     Result,
     SecurityEvent,
     SecurityStatus,
+    Severity,
     SINGLE_EVENT_ESCALATORS,
     TrustState,
 )
 from security.config import TrustPolicy
+from security.quarantine.revocation import RevocationDispatcher
 
 
 class TrustStateMachine(SecurityStateProvider):
-    def __init__(self, policy: TrustPolicy | None = None, clock: Callable[[], float] = time.time):
+    def __init__(self, policy: TrustPolicy | None = None, clock: Callable[[], float] = time.time,
+                 repository=None):
         self.policy = policy or TrustPolicy()
         self.clock = clock
+        self._repository = repository
         self._nodes: set[str] = set()
         self._states: dict[str, TrustState] = {}
         self._last_violation: dict[str, float] = {}
         self._last_event: dict[str, str] = {}
         self._auth_failures: dict[str, deque[float]] = defaultdict(deque)
         self._rate_limits: dict[str, deque[float]] = defaultdict(deque)
-        self._listeners: list[Callable[[str, float], Any]] = []
+        self._revocation = RevocationDispatcher()
+        self._state_listeners: list[Callable[[str, TrustState, float], Any]] = []
         self._audit = None
+        if repository is not None:
+            from security.authentication.registration import Role
+            self._nodes = {i.identity for i in repository.load_identities() if i.role is Role.NODE}
+            for identity, state, updated_at, reason in repository.load_trust():
+                self._states[identity] = state
+                self._last_event[identity] = reason
+                if state is TrustState.SUSPICIOUS:
+                    self._last_violation[identity] = updated_at
+            window_start = self.clock() - self.policy.suspicious_trigger.window_seconds
+            for identity, event_type, timestamp in repository.load_violations(window_start):
+                self._last_violation[identity] = max(
+                    timestamp, self._last_violation.get(identity, float("-inf"))
+                )
+                if event_type == EventType.AUTH_FAILURE.value:
+                    self._auth_failures[identity].append(timestamp)
+                elif event_type == EventType.RATE_LIMIT_VIOLATION.value:
+                    self._rate_limits[identity].append(timestamp)
+            for identity in self._nodes:
+                self._prune(self._auth_failures[identity], self.policy.suspicious_trigger.window_seconds, self.clock())
+                self._prune(self._rate_limits[identity], self.policy.suspicious_trigger.window_seconds, self.clock())
+                if identity not in self._states:
+                    self._states[identity] = TrustState.TRUSTED
+                    repository.save_trust(identity, TrustState.TRUSTED, self.clock(), "node_registered")
 
     def attach_audit(self, audit) -> None:
         self._audit = audit
         audit.add_listener(self.handle_event)
 
     def register_revocation_listener(self, callback: Callable[[str, float], Any]) -> None:
-        self._listeners.append(callback)
+        self._revocation.register_revocation_listener(callback)
+
+    def set_force_close_connection(self, callback: Callable[[str], Any]) -> None:
+        self._revocation.set_force_close_connection(callback)
+
+    def register_state_listener(self, callback: Callable[[str, TrustState, float], Any]) -> None:
+        self._state_listeners.append(callback)
 
     def get_trust_state(self, node_id: str) -> TrustState:
         state = self._states.get(node_id, TrustState.TRUSTED)
@@ -69,6 +104,9 @@ class TrustStateMachine(SecurityStateProvider):
             self._nodes.add(identity)
             self._states.setdefault(identity, TrustState.TRUSTED)
             self._last_event.setdefault(identity, event.event_type.value)
+            if self._repository is not None:
+                self._repository.save_trust(identity, self._states[identity], event.timestamp,
+                                            self._last_event[identity])
             return
         # Pre-auth IP actors, clients, and unknown identities have no node trust state.
         if identity not in self._nodes or event.event_type is EventType.TRUST_TRANSITION:
@@ -91,6 +129,8 @@ class TrustStateMachine(SecurityStateProvider):
             limits = self._rate_limits[identity]
             self._prune(limits, self.policy.suspicious_trigger.window_seconds, now)
             limits.append(now)
+        if self._repository is not None:
+            self._repository.add_violation(identity, kind.value, now)
 
         state = self._states.get(identity, TrustState.TRUSTED)
 
@@ -137,21 +177,33 @@ class TrustStateMachine(SecurityStateProvider):
                 and not allow_quarantine_reinstatement):
             raise ValueError("QUARANTINED requires explicit reinstatement")
 
+        timestamp = self.clock()
+        transition_event = None
+        if self._audit is not None:
+            transition_event = SecurityEvent(
+                "evt-" + uuid.uuid4().hex[:12], timestamp, EventType.TRUST_TRANSITION,
+                Severity.WARNING, node_id, Result.SUCCESS, "-",
+                {"from_state": current.value, "to_state": target.value, "reason": reason},
+            )
+        if self._repository is not None:
+            if transition_event is not None:
+                self._repository.save_trust_transition(
+                    node_id, target, timestamp, reason, transition_event
+                )
+            else:
+                self._repository.save_trust(node_id, target, timestamp, reason)
         self._states[node_id] = target
         if target is TrustState.SUSPICIOUS:
             self._last_violation[node_id] = self.clock()
-        if self._audit is not None:
-            self._audit.emit(
-                EventType.TRUST_TRANSITION, node_id, Result.SUCCESS, "-",
-                from_state=current.value, to_state=target.value, reason=reason,
-            )
+        if transition_event is not None:
+            self._audit.record_event(transition_event)
+        for callback in tuple(self._state_listeners):
+            try:
+                callback(node_id, target, timestamp)
+            except Exception:
+                logging.getLogger(__name__).exception("trust-state listener failed")
         if target is TrustState.REVOKED:
-            timestamp = self.clock()
-            for callback in tuple(self._listeners):
-                try:
-                    callback(node_id, timestamp)
-                except Exception:
-                    logging.getLogger(__name__).exception("revocation listener failed")
+            self._revocation.transition(node_id, timestamp)
         return True
 
     def reinstate(self, node_id: str) -> bool:
