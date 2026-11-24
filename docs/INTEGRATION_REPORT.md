@@ -70,7 +70,7 @@ Historical human/team actions from the first pass are superseded by this continu
 
 ## Continuation: A2 generation integration and M5-owned work (2026-11-24)
 
-A2's commit `b74895d3ddbff1cd93a927d0ff0a53a2e1a61b7e` was fetched from `origin/main` and merged into `feature/m5-full-integration` without overwriting local edits. Its `Runtime`, `RequestContext`, `Directory`, Object Manager, NodeClient/API contracts, generation tests, and `docs/COORDINATOR_GENERATION.md` are integrated in commit `503f048` on the feature branch. The M5 handoff changes were subsequently merged into `main`; see the merged-main verification below.
+A2's commit `b74895d3ddbff1cd93a927d0ff0a53a2e1a61b7e` was fetched from `origin/main` and merged into `feature/m5-full-integration` without overwriting local edits. Its `Runtime`, `RequestContext`, `Directory`, Object Manager, NodeClient/API contracts, generation tests, and `docs/COORDINATOR_GENERATION.md` are integrated in commit `503f048` on the feature branch. The M5 handoff changes were subsequently merged into local `main`; see the merged-main verification and remote-publication status below.
 
 M5 changes and integration hooks:
 
@@ -119,3 +119,5 @@ See `docs/COORDINATOR_RESTART_CONTRACT.md`, `docs/M5_CHECKLIST.md`, `docs/PHYSIC
 - The final source/test tree passed `git diff --check`. The merge contained no certificates, private keys, enrollment credentials, temporary databases, logs, or generated test artifacts.
 
 This establishes a common development baseline, not final integration acceptance. Generation-tagged storage reclamation (A1), authenticated transport generation propagation and fencing (B1), disconnected-node recovery (A2/B1), and cleanup/fresh-stat scheduler readiness (B2) remain incomplete. Full restart reclamation, Docker engine execution, and physical LAN deployment remain unverified.
+
+The verified merge is committed locally. It has not been published to `origin/main`: Git Credential Manager could not obtain a GitHub credential (`SEC_E_NO_CREDENTIALS` / no username available), and the connected GitHub integration rejected the `main` ref update with `Resource not accessible by integration`. No force-push was attempted. The remote's last confirmed `main` commit was `ce38420475563001974f88abf76d9dbb91355e73`; publish the local `main` head after GitHub authentication or repository integration permissions are available.
