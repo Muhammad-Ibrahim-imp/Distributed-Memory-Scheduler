@@ -1,6 +1,5 @@
-"""RequestContext — the authenticated identity of the sender, plus the request_id
-that identifies this specific operation across the coordinator, the runtime, and
-the memory node.
+"""RequestContext — authenticated sender and request metadata scoped to a
+coordinator generation.
 
 Owned by B1 (used by the network layer and passed to every node call).
 Imported by A1 (memory_node.node) and A2 (dsm runtime).
@@ -17,3 +16,5 @@ from dataclasses import dataclass
 class RequestContext:
     identity: str      # the verified sender identity (envelope.identity after AuthService.validate)
     request_id: str    # the envelope's request_id; the response carries the same value
+    # B1 propagates this to nodes for stale-allocation reclamation.
+    coordinator_generation: str | None = None

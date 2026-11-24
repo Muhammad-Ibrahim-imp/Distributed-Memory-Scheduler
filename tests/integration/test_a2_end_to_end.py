@@ -44,7 +44,7 @@ async def test_bound_handle_alloc_write_read_free_and_idempotence() -> None:
     handle = runtime.bind("alice")
 
     object_id = await handle.alloc(16)
-    assert UUID(object_id).version == 4
+    assert UUID(object_id.rsplit(".", 1)[1]).version == 4
     assert await handle.write(object_id, b"hello") is None
     assert await handle.read(object_id) == b"hello"
     await handle.free(object_id)

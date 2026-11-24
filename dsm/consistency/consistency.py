@@ -43,3 +43,8 @@ class ConsistencyManager:
         """Stop tracking a freed object."""
         self._versions.pop(object_id, None)
         self._locks.pop(object_id, None)
+
+    def clear(self) -> None:
+        """Stop tracking every object when the coordinator generation changes."""
+        self._versions.clear()
+        self._locks.clear()

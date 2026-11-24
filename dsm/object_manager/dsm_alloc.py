@@ -25,9 +25,9 @@ the new data, while a read concurrent with a write may see either value.
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Awaitable, Protocol, TypeVar
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from common.interfaces.NodeClient import NodeClient
 from common.types.context import RequestContext
@@ -103,6 +103,7 @@ class ObjectManager:
         config: ObjectManagerConfig = ObjectManagerConfig(),
         node_timeout: float = 5.0,
         cache: ObjectCache | None = None,
+        coordinator_generation: str | None = None,
     ) -> None:
         """Create an Object Manager with its runtime dependencies."""
         if (
@@ -125,7 +126,48 @@ class ObjectManager:
         self.config = config
         self.node_timeout = float(node_timeout)
         self.cache = cache
+        if coordinator_generation is not None:
+            generation_changed = (
+                coordinator_generation != directory.coordinator_generation
+            )
+            directory.activate_generation(coordinator_generation)
+            if generation_changed and self.cache is not None:
+                self.cache.clear()
+        self.coordinator_generation = directory.coordinator_generation
         self._revoked_node_timestamps: dict[str, float] = {}
+
+    def start_generation(self, coordinator_generation: str) -> list[str]:
+        """Activate a coordinator generation and invalidate all prior local state."""
+        stale_object_ids = self.directory.activate_generation(coordinator_generation)
+        if coordinator_generation != self.coordinator_generation:
+            self.coordinator_generation = coordinator_generation
+            self._revoked_node_timestamps.clear()
+            if self.cache is not None:
+                self.cache.clear()
+        return stale_object_ids
+
+    def _generation_context(self, ctx: RequestContext) -> RequestContext:
+        """Attach the active generation or reject a request from a stale runtime."""
+        if (
+            ctx.coordinator_generation is not None
+            and ctx.coordinator_generation != self.coordinator_generation
+        ):
+            raise ObjectUnavailableError(
+                "request belongs to an obsolete coordinator generation"
+            )
+        return replace(ctx, coordinator_generation=self.coordinator_generation)
+
+    def _ensure_current_object_id(self, object_id: str) -> None:
+        """Reject generation-qualified handles issued by an earlier coordinator."""
+        generation, separator, nonce = object_id.rpartition(".")
+        if not separator:
+            return
+        try:
+            UUID(nonce)
+        except ValueError:
+            return
+        if generation != self.coordinator_generation:
+            raise ObjectNotFoundError(object_id)
 
     async def _call_node(self, coro: Awaitable[_NodeResult]) -> _NodeResult:
         """Run a node operation with a deadline and normalize timeout errors."""
@@ -174,11 +216,13 @@ class ObjectManager:
         owner_identity: str,
         size: int,
     ) -> str:
-        """Allocate an object on a selected node and return its UUID4."""
+        """Allocate an object and return its generation-qualified UUID4."""
+        ctx = self._generation_context(ctx)
+        generation = self.coordinator_generation
         if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
             raise InvalidRequestError("size must be a positive integer")
 
-        object_id = str(uuid4())
+        object_id = f"{generation}.{uuid4()}"
         attempted_node_ids: set[str] = set()
         last_error: (
             OutOfCapacityError | QuotaExceededError | DSMTimeoutError | None
@@ -225,6 +269,10 @@ class ObjectManager:
                 last_error = exc
                 continue
 
+            if generation != self.coordinator_generation:
+                raise ObjectUnavailableError(
+                    "coordinator generation changed during allocation"
+                )
             self.directory.put(
                 ObjectRecord(
                     object_id=object_id,
@@ -233,6 +281,7 @@ class ObjectManager:
                     node_id=decision.node_id,
                     version=0,
                     state=ObjectState.ALLOCATED,
+                    coordinator_generation=generation,
                 )
             )
             if decision.node_id in self._revoked_node_timestamps:
@@ -254,6 +303,9 @@ class ObjectManager:
         object_id: str,
     ) -> bytes:
         """Read an owned object; quarantined nodes remain readable."""
+        self._ensure_current_object_id(object_id)
+        ctx = self._generation_context(ctx)
+        generation = self.coordinator_generation
         record = self.directory.get(object_id)
         if record is None:
             raise ObjectNotFoundError(object_id)
@@ -278,9 +330,13 @@ class ObjectManager:
                 object_id,
                 cached_entry[0],
             ):
+                if generation != self.coordinator_generation:
+                    raise ObjectUnavailableError(
+                        "coordinator generation changed during read"
+                    )
                 return cached_entry[1]
 
-        # Capture before the await so a delayed reader cannot stamp new bytes with a later version.
+        # Capture before the await so delayed readers cannot stamp a newer version.
         version_before = record.version
         return await self._call_node(
             self._read_and_cache(
@@ -288,6 +344,7 @@ class ObjectManager:
                 record,
                 object_id,
                 version_before,
+                generation,
             )
         )
 
@@ -297,6 +354,7 @@ class ObjectManager:
         record: ObjectRecord,
         object_id: str,
         version_before: int,
+        generation: str,
     ) -> bytes:
         """Fetch bytes from a node and cache them at the captured version."""
         data = await self.node_client.read(
@@ -305,6 +363,8 @@ class ObjectManager:
             object_id,
             record.owner_identity,
         )
+        if generation != self.coordinator_generation:
+            raise ObjectUnavailableError("coordinator generation changed during read")
         if self.cache is not None:
             self.cache.put(object_id, version_before, data)
         return data
@@ -321,6 +381,9 @@ class ObjectManager:
         After a timeout, the result is unknown: the node may or may not have
         applied the write, but the Directory version is not incremented.
         """
+        self._ensure_current_object_id(object_id)
+        ctx = self._generation_context(ctx)
+        generation = self.coordinator_generation
         record = self.directory.get(object_id)
         if record is None:
             raise ObjectNotFoundError(object_id)
@@ -368,6 +431,10 @@ class ObjectManager:
                         bytes(data),
                     )
                 )
+                if generation != self.coordinator_generation:
+                    raise ObjectUnavailableError(
+                        "coordinator generation changed during write"
+                    )
             except BaseException:
                 if self.cache is not None:
                     self.cache.invalidate(object_id)
@@ -385,6 +452,8 @@ class ObjectManager:
         object_id: str,
     ) -> None:
         """Free an owned object, keeping metadata if node deletion times out."""
+        self._ensure_current_object_id(object_id)
+        ctx = self._generation_context(ctx)
         record = self.directory.get(object_id)
         if record is None:
             return
@@ -413,14 +482,19 @@ class ObjectManager:
                 or self.security.get_trust_state(record.node_id) is TrustState.REVOKED
             )
             if not is_revoked:
-                await self._call_node(
-                    self.node_client.free(
-                        ctx,
-                        record.node_id,
-                        object_id,
-                        record.owner_identity,
+                try:
+                    await self._call_node(
+                        self.node_client.free(
+                            ctx,
+                            record.node_id,
+                            object_id,
+                            record.owner_identity,
+                        )
                     )
-                )
+                except BaseException:
+                    if self.cache is not None:
+                        self.cache.invalidate(object_id)
+                    raise
 
             self.directory.remove(object_id)
             if self.cache is not None:
