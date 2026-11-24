@@ -2,16 +2,18 @@ import asyncio
 import time
 
 from common.protocol import dsm_pb2
-from common.types.errors import TokenExpiredError
+from common.types.errors import RateLimitedError, TokenExpiredError
 from network.security.tls import client_context
 from network.tcp.connection import Connection
 from network.tcp.errors import code_to_error
 
 
 class RemoteDSMAPI:
-    def __init__(self, host, port, label, enrollment_secret, refresh_callback=None):
+    def __init__(self, host, port, label, enrollment_secret, refresh_callback=None,
+                 server_hostname=None):
         self.host, self.port = host, port
         self.label, self.enrollment_secret = label, enrollment_secret
+        self.server_hostname = server_hostname or host
         self.identity: str | None = None
         self.token: str | None = None
         self.credential: str | None = None
@@ -21,12 +23,15 @@ class RemoteDSMAPI:
 
     async def connect(self):
         reader, writer = await asyncio.open_connection(
-            self.host, self.port, ssl=client_context(), server_hostname="coordinator"
+            self.host, self.port, ssl=client_context(), server_hostname=self.server_hostname
         )
         self.connection = Connection(reader, writer)
         self.connection.start()
-        await self._register()
-        await self._refresh()
+        if self.identity and self.credential:
+            await self._refresh()
+        else:
+            await self._register()
+            await self._refresh()
 
     async def close(self):
         if self.connection:
@@ -72,19 +77,22 @@ class RemoteDSMAPI:
         self.token = resp.refresh_response.token
 
     async def _call(self, env):
-        resp = await self.connection.call(env)
-        if resp.WhichOneof("payload") == "error":
+        for attempt in range(31):
+            resp = await self.connection.call(env)
+            if resp.WhichOneof("payload") != "error":
+                return resp
             err = code_to_error(resp.error.code, resp.error.message)
             if isinstance(err, TokenExpiredError):
                 await self._refresh()
                 env.token = self.token
-                env.nonce = self._rid()   # NEW nonce; SAME request_id
-                resp = await self.connection.call(env)
-                if resp.WhichOneof("payload") == "error":
-                    raise code_to_error(resp.error.code, resp.error.message)
-                return resp
-            raise err
-        return resp
+            elif isinstance(err, RateLimitedError) and attempt < 30:
+                await asyncio.sleep(0.2)
+            else:
+                raise err
+            # Rejected requests may be retried with the same request id, but
+            # replay protection requires a fresh nonce and current timestamp.
+            env.nonce = self._rid()
+            env.timestamp = time.time()
 
     async def alloc(self, size: int) -> str:
         env = self._env()

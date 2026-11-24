@@ -70,6 +70,71 @@ async def test_revoked_node_certificate_is_persistently_denied(enrollment):
         restarted_guard.authorize(Role.NODE, env[policy.node_secret_env], fingerprint)
 
 
+def test_certificate_binding_persists_and_blocks_duplicate_enrollment(tmp_path):
+    from security.bootstrap import build_security_core
+    from security.config import AuditPolicy, SecurityConfig
+    from security.persistence.database import SecurityDatabase
+    from security.persistence.repository import SecurityRepository
+
+    policy = EnrollmentPolicy(denylist_path=str(tmp_path / "denylist.json"))
+    env = {policy.node_secret_env: "node-enrollment-test-secret-0123456789",
+           policy.client_secret_env: "client-enrollment-test-secret-0123456789"}
+    path = tmp_path / "security.db"
+    repo = SecurityRepository(SecurityDatabase(path))
+    core = build_security_core(SecurityConfig(audit=AuditPolicy(path=str(tmp_path / "audit.jsonl"))),
+                               repository=repo)
+    fingerprint = "f" * 64
+    node = core.auth.register(Role.NODE, "node-1", certificate_fingerprint=fingerprint)
+    core.audit.close()
+    repo.close()
+
+    repo = SecurityRepository(SecurityDatabase(path))
+    guard = EnrollmentGuard(policy, env, repo)
+    assert repo.get_node_certificate(node.identity) == fingerprint
+    assert guard.authorize_node_reconnect(node.identity, fingerprint) is None
+    with pytest.raises(EnrollmentDenied):
+        guard.authorize(Role.NODE, env[policy.node_secret_env], fingerprint)
+    with pytest.raises(EnrollmentDenied):
+        guard.authorize_node_reconnect(node.identity, "e" * 64)
+    repo.close()
+
+
+def test_revoked_certificate_binding_survives_restart(enrollment, tmp_path):
+    from security.bootstrap import build_security_core
+    from security.config import AuditPolicy, SecurityConfig
+    from security.persistence.database import SecurityDatabase
+    from security.persistence.repository import SecurityRepository
+    from security.errors import IdentityBlockedError
+
+    policy, env, _ = enrollment
+    path = tmp_path / "security.db"
+    repo = SecurityRepository(SecurityDatabase(path))
+    core = build_security_core(SecurityConfig(audit=AuditPolicy(path=str(tmp_path / "audit.jsonl"))),
+                               repository=repo)
+    trust = TrustStateMachine(repository=repo)
+    trust.attach_audit(core.audit)
+    fingerprint = "a" * 64
+    node = core.auth.register(Role.NODE, "node", certificate_fingerprint=fingerprint)
+    guard = EnrollmentGuard(policy, env, repo)
+    trust.register_revocation_listener(guard.record_revocation)
+    trust.register_revocation_listener(lambda identity, _ts: core.auth.revoke_identity(identity))
+    assert trust.transition(node.identity, TrustState.SUSPICIOUS, "test")
+    assert trust.transition(node.identity, TrustState.QUARANTINED, "test")
+    assert core.auth.authenticate(node.identity, node.credential).identity == node.identity
+    assert trust.transition(node.identity, TrustState.REVOKED, "test")
+    with pytest.raises(IdentityBlockedError):
+        core.auth.authenticate(node.identity, node.credential)
+    core.audit.close()
+    repo.close()
+
+    repo = SecurityRepository(SecurityDatabase(path))
+    restarted_guard = EnrollmentGuard(policy, env, repo)
+    with pytest.raises(EnrollmentDenied):
+        restarted_guard.authorize_node_reconnect(node.identity, fingerprint)
+    assert repo.get_node_certificate(node.identity) == fingerprint
+    repo.close()
+
+
 class FakeConnection:
     def __init__(self):
         self.sent = []
@@ -82,8 +147,8 @@ class FakeAuth:
     def __init__(self):
         self.calls = []
 
-    def register(self, role, label, request_id):
-        self.calls.append((role, label, request_id))
+    def register(self, role, label, request_id, certificate_fingerprint=None):
+        self.calls.append((role, label, request_id, certificate_fingerprint))
         return SimpleNamespace(identity="node-uuid", credential="one-time-credential")
 
 
@@ -98,7 +163,8 @@ class FakeAudit:
 def test_coordinator_rejects_bad_secret_before_minting_identity(enrollment):
     _, _, guard = enrollment
     auth, audit, conn = FakeAuth(), FakeAudit(), FakeConnection()
-    server = CoordinatorServer("localhost", 0, auth, object(), enrollment=guard, audit=audit)
+    runtime = SimpleNamespace(start_generation=lambda _generation: None)
+    server = CoordinatorServer("localhost", 0, auth, runtime, enrollment=guard, audit=audit)
     env = dsm_pb2.Envelope()
     env.register.request_id = "request-1"
     env.register.role = "node"
@@ -116,7 +182,8 @@ def test_coordinator_rejects_bad_secret_before_minting_identity(enrollment):
 def test_coordinator_binds_certificate_on_valid_node_registration(enrollment):
     policy, env_values, guard = enrollment
     auth, conn = FakeAuth(), FakeConnection()
-    server = CoordinatorServer("localhost", 0, auth, object(), enrollment=guard)
+    runtime = SimpleNamespace(start_generation=lambda _generation: None)
+    server = CoordinatorServer("localhost", 0, auth, runtime, enrollment=guard)
     env = dsm_pb2.Envelope()
     env.register.request_id = "request-2"
     env.register.role = "node"

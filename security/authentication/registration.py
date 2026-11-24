@@ -49,13 +49,14 @@ class IdentityStore:
         if repository is not None:
             self._by_id = {i.identity: i for i in repository.load_identities()}
 
-    def register(self, role: Role | str, label: str) -> tuple[str, str]:
+    def register(self, role: Role | str, label: str,
+                 certificate_fingerprint: str | None = None) -> tuple[str, str]:
         """Policy signature: register(role, label) -> (identity, credential)."""
         credential = secrets.token_urlsafe(32)
         ident = Identity(str(uuid.uuid4()), label, Role(role), hash_credential(credential),
                          self._clock())
         if self._repository is not None:
-            self._repository.save_identity(ident)
+            self._repository.save_identity(ident, certificate_fingerprint)
         self._by_id[ident.identity] = ident
         return ident.identity, credential
 

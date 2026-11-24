@@ -15,6 +15,7 @@ async def main():
     
     host = os.environ.get("SECURITY_HOST", "coordinator")
     port = int(os.environ.get("SECURITY_PORT", 8443))
+    heartbeat_interval = float(os.environ.get("NODE_HEARTBEAT_INTERVAL", 5.0))
     secret = os.environ.get("DSM_NODE_ENROLLMENT_SECRET", "")
     node_cert = os.environ.get("DSM_NODE_CERT_FILE", f"certs/nodes/{node_id}.pem")
     node_key = os.environ.get("DSM_NODE_KEY_FILE", f"certs/nodes/{node_id}.key")
@@ -27,7 +28,7 @@ async def main():
     mem_fraction = 0.5
     max_objects = 10000
     try:
-        with open("configs/security.yaml", "r") as f:
+        with open(os.environ.get("DSM_SECURITY_CONFIG", "configs/security.yaml"), "r") as f:
             cfg = yaml.safe_load(f)
             limits = cfg.get("rate_limit", {}).get("node_level", {})
             mem_fraction = limits.get("max_memory_fraction_per_client", 0.5)
@@ -46,8 +47,8 @@ async def main():
     memory_node = MemoryNode(
         node_id=node_id, 
         total_capacity_bytes=total_capacity,
-        max_memory_fraction=mem_fraction,
-        max_objects=max_objects,
+        max_memory_fraction_per_client=mem_fraction,
+        max_objects_per_client=max_objects,
         headroom_fraction=headroom_fraction,
         headroom_min_bytes=headroom_min_bytes,
         event_sink=event_sink
@@ -57,8 +58,10 @@ async def main():
     service = NodeService(
         host=host, port=port, label=node_id,
         enrollment_secret=secret, memory_node=memory_node,
+        heartbeat_interval=heartbeat_interval,
         event_queue=event_queue,
         client_cert=node_cert, client_key=node_key,
+        server_hostname=os.environ.get("DSM_TLS_SERVER_NAME", "coordinator"),
     )
     
     print(f"[node] starting {node_id} targeting {host}:{port}")

@@ -42,8 +42,9 @@ class AuthService:
         self._ids, self._sessions, self._tokens, self._audit = identities, sessions, tokens, audit
         self._trust = trust
 
-    def register(self, role: Role | str, label: str, request_id: str | None = None) -> RegistrationResult:
-        identity, credential = self._ids.register(role, label)
+    def register(self, role: Role | str, label: str, request_id: str | None = None,
+                 certificate_fingerprint: str | None = None) -> RegistrationResult:
+        identity, credential = self._ids.register(role, label, certificate_fingerprint)
         role = Role(role)
         self._audit.emit(EventType.NODE_REGISTERED if role is Role.NODE else EventType.CLIENT_REGISTERED,
                          identity, Result.SUCCESS, request_id, label=label)

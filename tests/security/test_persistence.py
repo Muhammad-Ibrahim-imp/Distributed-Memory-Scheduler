@@ -50,6 +50,39 @@ def test_identity_credentials_trust_violations_and_audit_survive_new_instances(t
     repo2.close()
 
 
+def test_v1_database_migrates_without_losing_security_records(tmp_path):
+    path = tmp_path / "security.db"
+    connection = sqlite3.connect(path)
+    connection.execute("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    connection.execute("INSERT INTO metadata VALUES('schema_version', '1')")
+    connection.execute("CREATE TABLE identities (identity TEXT PRIMARY KEY, label TEXT NOT NULL, role TEXT NOT NULL, credential_hash TEXT NOT NULL, created_at REAL NOT NULL, revoked INTEGER NOT NULL DEFAULT 0)")
+    connection.execute("INSERT INTO identities VALUES('node-id','node','node','hash',1,0)")
+    connection.commit()
+    connection.close()
+
+    repo = repository(path)
+    assert repo.database.run(lambda db: db.execute(
+        "SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0]) == "2"
+    assert repo.database.run(lambda db: db.execute(
+        "SELECT identity FROM identities").fetchone()[0]) == "node-id"
+    assert repo.database.run(lambda db: db.execute(
+        "SELECT count(*) FROM node_certificates").fetchone()[0]) == 0
+    repo.close()
+
+
+def test_node_identity_and_certificate_binding_commit_atomically(tmp_path):
+    repo = repository(tmp_path / "security.db")
+    core = build_security_core(SecurityConfig(
+        audit=AuditPolicy(path=str(tmp_path / "audit.jsonl"))), repository=repo)
+    node = core.auth.register(Role.NODE, "node", certificate_fingerprint="a" * 64)
+    assert repo.get_node_certificate(node.identity) == "a" * 64
+    with pytest.raises(SecurityPersistenceError):
+        core.auth.register(Role.NODE, "duplicate-cert", certificate_fingerprint="a" * 64)
+    assert len(core.identities._by_id) == 1
+    core.audit.close()
+    repo.close()
+
+
 def test_sessions_are_ephemeral_and_revoked_identity_stays_blocked_after_restart(tmp_path):
     path = tmp_path / "security.db"
     key = TokenService.generate_key()
@@ -155,6 +188,17 @@ def test_write_failure_does_not_cache_new_identity(tmp_path):
     repo.close()
     with pytest.raises(SecurityPersistenceError):
         core.identities.register(Role.CLIENT, "client")
+    assert core.identities._by_id == {}
+    core.audit.close()
+
+
+def test_certificate_binding_write_failure_does_not_cache_identity(tmp_path):
+    repo = repository(tmp_path / "security.db")
+    core = build_security_core(SecurityConfig(
+        audit=AuditPolicy(path=str(tmp_path / "audit.jsonl"))), repository=repo)
+    repo.close()
+    with pytest.raises(SecurityPersistenceError):
+        core.identities.register(Role.NODE, "node", certificate_fingerprint="a" * 64)
     assert core.identities._by_id == {}
     core.audit.close()
 

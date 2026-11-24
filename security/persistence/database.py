@@ -11,7 +11,7 @@ class SecurityPersistenceError(RuntimeError):
     """Durable security state could not be opened or updated safely."""
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS identities (
@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS bans (
   created_at REAL NOT NULL, reason TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bans_identity_idx ON bans(identity);
+CREATE TABLE IF NOT EXISTS node_certificates (
+  identity TEXT PRIMARY KEY REFERENCES identities(identity),
+  fingerprint TEXT NOT NULL UNIQUE,
+  enrolled_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit_events (
   event_id TEXT PRIMARY KEY, occurred_at REAL NOT NULL, event_type TEXT NOT NULL,
   actor_id TEXT NOT NULL, result TEXT NOT NULL, request_id TEXT NOT NULL,
@@ -67,6 +72,11 @@ class SecurityDatabase:
                 if row is None:
                     self._connection.execute(
                         "INSERT INTO metadata(key,value) VALUES('schema_version',?)",
+                        (str(SCHEMA_VERSION),),
+                    )
+                elif int(row[0]) == 1:
+                    self._connection.execute(
+                        "UPDATE metadata SET value=? WHERE key='schema_version'",
                         (str(SCHEMA_VERSION),),
                     )
                 elif int(row[0]) != SCHEMA_VERSION:
