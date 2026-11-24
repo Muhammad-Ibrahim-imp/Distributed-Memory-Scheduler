@@ -92,8 +92,9 @@ class EventType(str, Enum):
     # Node-local events, reported by A1 (policy §10.1). A failed secure delete
     # does NOT escalate -- see SINGLE_EVENT_ESCALATORS.
     SECURE_DELETE_FAILED = "secure_delete_failed"
+    # Stored object's SHA-256 no longer matches on read. Escalates (see
+    # SINGLE_EVENT_ESCALATORS): TRUSTED -> SUSPICIOUS only, never quarantine or revoke.
     OBJECT_INTEGRITY_FAILED = "object_integrity_failed"
-
 
 # Policy §6.4: one event of one of these types alone moves TRUSTED -> SUSPICIOUS.
 #

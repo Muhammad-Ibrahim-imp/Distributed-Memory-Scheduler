@@ -133,3 +133,8 @@ def test_local_failure_does_not_stop_the_sink(monkeypatch):
     SecurityAuditReporter("node-1", event_sink=got.append).report_secure_delete_failed(
         "obj-1", "req-1")
     assert len(got) == 1
+def test_agreed_trust_effects():
+    from common.types.security import SINGLE_EVENT_ESCALATORS
+    assert EventType.OBJECT_INTEGRITY_FAILED in SINGLE_EVENT_ESCALATORS
+    assert EventType.SECURE_DELETE_FAILED not in SINGLE_EVENT_ESCALATORS
+    assert EventType.AUTHZ_DENIED not in SINGLE_EVENT_ESCALATORSgit
