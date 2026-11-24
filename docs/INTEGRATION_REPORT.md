@@ -70,7 +70,7 @@ Historical human/team actions from the first pass are superseded by this continu
 
 ## Continuation: A2 generation integration and M5-owned work (2026-11-24)
 
-A2's commit `b74895d3ddbff1cd93a927d0ff0a53a2e1a61b7e` was fetched from `origin/main` and merged into `feature/m5-full-integration` without overwriting local edits. Its `Runtime`, `RequestContext`, `Directory`, Object Manager, NodeClient/API contracts, generation tests, and `docs/COORDINATOR_GENERATION.md` are integrated in commit `503f048` on this feature branch. The completed M5 handoff changes are included in the commits that follow it; nothing was merged into or pushed to `main`.
+A2's commit `b74895d3ddbff1cd93a927d0ff0a53a2e1a61b7e` was fetched from `origin/main` and merged into `feature/m5-full-integration` without overwriting local edits. Its `Runtime`, `RequestContext`, `Directory`, Object Manager, NodeClient/API contracts, generation tests, and `docs/COORDINATOR_GENERATION.md` are integrated in commit `503f048` on the feature branch. The M5 handoff changes were subsequently merged into `main`; see the merged-main verification below.
 
 M5 changes and integration hooks:
 
@@ -107,3 +107,15 @@ The full-stack scenario verifies trust-state persistence and scheduler exclusion
 - Benchmarks are end-to-end measurements; no physical performance or isolated cryptographic/audit overhead claim is made. Authoritative per-node stats and policy changes need A1/B2 operational support.
 
 See `docs/COORDINATOR_RESTART_CONTRACT.md`, `docs/M5_CHECKLIST.md`, `docs/PHYSICAL_LAN_INTEGRATION.md`, and `docs/BENCHMARK_HANDOFF.md` for the shared interfaces, commands, owners, and acceptance gates.
+
+## Merged-main verification (2026-11-24)
+
+- Fetched current `origin/main` at `ce38420`, including A1's audit updates, and merged the feature branch without conflicts. Merge commit: `c74a8b46f8bf5398448f28da86dd88aa3305f64c` (`merge: integrate M5 full-system work`). A follow-up integration-test correction is commit `72f581104f0d063cf569b04193f8db7d0a9dc0bf`.
+- Complete regression on the follow-up commit: `rtk proxy powershell -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q --basetemp=.pytest-tmp-main-final-20261124 -p no:cacheprovider"` — **513 passed, 1 skipped in 145.35 seconds**.
+- Explicit A1 audit test: `rtk proxy powershell -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q -rs tests/unit/A1_tests/test_a1_audit.py --basetemp=.pytest-tmp-a1-audit-merged -p no:cacheprovider"` — **11 passed, 1 skipped**. `test_integrity_failed_event` now executes. The only skip is `test_integrity_failed_is_logged_locally_until_the_type_exists`, whose fallback is obsolete while the shared event type exists.
+- Explicit real three-node subprocess workflow: `rtk proxy powershell -NoProfile -Command ".\.venv\Scripts\python.exe -m pytest -q -s tests/integration/full_stack/test_single_node_real.py --basetemp=.pytest-tmp-three-node-main-rerun-20261124 -p no:cacheprovider"` — **1 passed in 130.05 seconds**. It exercised three TLS-connected node processes, actual placement, security restrictions, restart, and adapter paths.
+- Corrected an upstream stray `git` suffix in the A1 audit assertion. Stabilized the live quota assertion to request one byte beyond the per-node quota while the three nodes remain schedulable; the former 9 MiB request could fail earlier as out-of-capacity after nodes were quarantined.
+- The merge was conflict-free. No conflict markers or manual conflict resolutions were needed in shared types, interfaces, security code, tests, or coordinator wiring.
+- The final source/test tree passed `git diff --check`. The merge contained no certificates, private keys, enrollment credentials, temporary databases, logs, or generated test artifacts.
+
+This establishes a common development baseline, not final integration acceptance. Generation-tagged storage reclamation (A1), authenticated transport generation propagation and fencing (B1), disconnected-node recovery (A2/B1), and cleanup/fresh-stat scheduler readiness (B2) remain incomplete. Full restart reclamation, Docker engine execution, and physical LAN deployment remain unverified.
