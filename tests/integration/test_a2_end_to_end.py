@@ -44,7 +44,7 @@ async def test_bound_handle_alloc_write_read_free_and_idempotence() -> None:
     handle = runtime.bind("alice")
 
     object_id = await handle.alloc(16)
-    assert UUID(object_id).version == 4
+    assert UUID(object_id.rsplit(".", 1)[1]).version == 4
     assert await handle.write(object_id, b"hello") is None
     assert await handle.read(object_id) == b"hello"
     await handle.free(object_id)
@@ -73,8 +73,8 @@ async def test_handles_cannot_read_write_or_free_another_identity_object() -> No
     assert await alice.read(object_id) == b"owned"
 
 
-async def test_revoked_objects_are_blocked_and_free_remains_available() -> None:
-    """Revocation affects one node and an owner can still release its object."""
+async def test_revoked_objects_reject_free_and_preserve_directory_metadata() -> None:
+    """Revoked state denies every DSM operation and retains local metadata."""
     runtime, directory, security, _ = make_runtime(["node-A", "node-B"])
     alice = runtime.bind("alice")
     node_a_id = await alice.alloc(16)
@@ -82,15 +82,17 @@ async def test_revoked_objects_are_blocked_and_free_remains_available() -> None:
     await alice.write(node_b_id, b"other node")
 
     assert security.revoke_node("node-A", 42.0) == [[node_a_id]]
-    assert directory.get(node_a_id).state is ObjectState.REVOKED
+    assert directory.get(node_a_id).state is ObjectState.UNAVAILABLE
+    assert directory.get(node_a_id).unavailable_since == 42.0
     assert directory.get(node_b_id).state is ObjectState.ALLOCATED
     with pytest.raises(ObjectUnavailableError):
         await alice.read(node_a_id)
     with pytest.raises(ObjectUnavailableError):
         await alice.write(node_a_id, b"blocked")
 
-    await alice.free(node_a_id)
-    assert directory.get(node_a_id) is None
+    with pytest.raises(ObjectUnavailableError):
+        await alice.free(node_a_id)
+    assert directory.get(node_a_id) is not None
     assert await alice.read(node_b_id) == b"other node"
 
 
@@ -112,7 +114,7 @@ async def test_quarantine_recovers_but_revocation_is_permanent() -> None:
 
     manager.handle_node_revoked("node-R", 3.0)
     manager.handle_node_trust_state_changed("node-R", TrustState.TRUSTED, 4.0)
-    assert directory.get(revoked_id).state is ObjectState.REVOKED
+    assert directory.get(revoked_id).state is ObjectState.UNAVAILABLE
 
 
 async def test_node_failure_blocks_object_access_and_invalidates_cache() -> None:

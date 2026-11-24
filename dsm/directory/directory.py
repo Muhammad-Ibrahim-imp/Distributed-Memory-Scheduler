@@ -3,6 +3,7 @@ from common.types.errors import ObjectNotFoundError
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
+from uuid import uuid4
 
 from dsm.consistency import ConsistencyManager
 
@@ -20,7 +21,7 @@ class ObjectState(str, Enum):
 
 @dataclass
 class ObjectRecord:
-    # opaque UUID4 string created by the Object Manager at alloc (nobody else parses it)
+    # opaque generation-qualified UUID4 string created by the Object Manager
     object_id: str
     # client identity that owns this object (passed as owner_identity to check_access)
     owner_identity: str
@@ -31,24 +32,63 @@ class ObjectRecord:
     # bumped on every write; versioning is A2's job, not A1's node
     version: int = 0
     state: ObjectState = ObjectState.ALLOCATED
+    unavailable_since: float | None = None
+    coordinator_generation: str | None = None
 
 
 class Directory:
     """Global object namespace with a lock for each object's metadata."""
 
-    def __init__(self) -> None:
+    def __init__(self, coordinator_generation: str | None = None) -> None:
+        self._coordinator_generation = self._validate_generation(
+            coordinator_generation
+            if coordinator_generation is not None
+            else str(uuid4())
+        )
         self._records: dict[str, ObjectRecord] = {}
         self._consistency = ConsistencyManager()
 
+    @staticmethod
+    def _validate_generation(generation: str) -> str:
+        if not isinstance(generation, str) or not generation or "." in generation:
+            raise ValueError(
+                "coordinator_generation must be a non-empty string without '.'"
+            )
+        return generation
+
+    @property
+    def coordinator_generation(self) -> str:
+        return self._coordinator_generation
+
+    def activate_generation(self, coordinator_generation: str) -> list[str]:
+        """Switch generations and discard all prior-generation metadata."""
+        generation = self._validate_generation(coordinator_generation)
+        if generation == self._coordinator_generation:
+            return []
+
+        stale_object_ids = list(self._records)
+        self._records.clear()
+        self._consistency.clear()
+        self._coordinator_generation = generation
+        return stale_object_ids
+
     def get(self, object_id: str) -> ObjectRecord | None:
         record = self._records.get(object_id)
-        if record is not None:
+        if (
+            record is not None
+            and record.coordinator_generation == self._coordinator_generation
+        ):
             version = self._consistency.get_version(object_id)
             if version is not None:
                 record.version = version
-        return record
+            return record
+        return None
 
     def put(self, record: ObjectRecord) -> None:
+        if record.coordinator_generation is None:
+            record.coordinator_generation = self._coordinator_generation
+        elif record.coordinator_generation != self._coordinator_generation:
+            raise ValueError("object record belongs to a different coordinator generation")
         self._consistency.register(record.object_id, record.version)
         self._records[record.object_id] = record
 
@@ -86,12 +126,24 @@ class Directory:
 
     def mark_node_state(self, node_id: str, state: ObjectState) -> list[str]:
         # set the state of every object on a node and return their ids
-        # the revocation handler calls this with REVOKED or QUARANTINED
-        # calling it with ALLOCATED restores them if the node becomes trusted again
+        # calling it with ALLOCATED restores objects after trust recovery
         affected = []
         for record in self._records.values():
             if record.node_id == node_id:
-                record.state = state               # same record object, so version and lock are kept
+                record.state = state
+                if state is ObjectState.ALLOCATED:
+                    record.unavailable_since = None
+                affected.append(record.object_id)
+        return affected
+
+    def mark_node_unavailable(self, node_id: str, timestamp: float) -> list[str]:
+        """Mark every object on a revoked node unavailable at the given time."""
+        affected = []
+        for record in self._records.values():
+            if record.node_id == node_id:
+                record.state = ObjectState.UNAVAILABLE
+                if record.unavailable_since is None:
+                    record.unavailable_since = timestamp
                 affected.append(record.object_id)
         return affected
 

@@ -13,6 +13,7 @@ from common.types.errors import (
     ObjectNotFoundError,
     ObjectUnavailableError,
 )
+from common.types.security import TrustState
 from dsm.directory.directory import Directory, ObjectState
 from dsm.object_manager import ObjectManager, ObjectManagerConfig
 from tests.mocks.fakes import FakeNodeClient, FakeScheduler, FakeSecurity
@@ -86,6 +87,35 @@ async def test_read_quarantined_is_allowed_and_revoked_is_blocked() -> None:
     call_count += 1
     with pytest.raises(ObjectUnavailableError):
         await manager.read(make_context(), "alice", revoked_id)
+
+    assert len(node.call_log) == call_count
+
+
+async def test_live_quarantine_state_blocks_writes_but_allows_reads() -> None:
+    """The write path consults current trust even without a directory update."""
+    manager, _, node = make_manager()
+    object_id = await allocate(manager)
+    manager.security = FakeSecurity(
+        trust_states={"node-1": TrustState.QUARANTINED}
+    )
+    call_count = len(node.call_log)
+
+    assert await manager.read(make_context(), "alice", object_id) == b""
+    with pytest.raises(ObjectUnavailableError):
+        await manager.write(make_context(), "alice", object_id, b"blocked")
+
+    assert len(node.call_log) == call_count + 1
+
+
+async def test_live_revocation_state_blocks_reads_before_node_io() -> None:
+    """A live revoked state is enforced even before the callback updates metadata."""
+    manager, _, node = make_manager()
+    object_id = await allocate(manager)
+    manager.security = FakeSecurity(trust_states={"node-1": TrustState.REVOKED})
+    call_count = len(node.call_log)
+
+    with pytest.raises(ObjectUnavailableError):
+        await manager.read(make_context(), "alice", object_id)
 
     assert len(node.call_log) == call_count
 

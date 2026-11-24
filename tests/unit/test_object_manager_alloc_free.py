@@ -10,9 +10,11 @@ from common.types.errors import (
     DSMTimeoutError,
     InvalidRequestError,
     NotOwnerError,
+    ObjectUnavailableError,
     OutOfCapacityError,
     QuotaExceededError,
 )
+from common.types.security import TrustState
 from dsm.directory.directory import Directory, ObjectRecord, ObjectState
 from dsm.object_manager import ObjectManager, ObjectManagerConfig
 from tests.mocks.fakes import FakeNodeClient, FakeScheduler, FakeSecurity
@@ -62,9 +64,10 @@ async def test_alloc_stores_record_and_passes_scheduler_arguments() -> None:
         node_id="node-1",
         version=0,
         state=ObjectState.ALLOCATED,
+        coordinator_generation=directory.coordinator_generation,
     )
     assert scheduler.calls == [{"object_id": object_id, "object_size": 64}]
-    assert UUID(object_id).version == 4
+    assert UUID(object_id.rsplit(".", 1)[1]).version == 4
     assert object_id in node.data
     assert await manager.read(make_context(), "alice", object_id) == b""
 
@@ -281,16 +284,32 @@ async def test_non_owner_cannot_free_object() -> None:
     assert len(node.call_log) == call_count
 
 
-async def test_free_revoked_object_skips_node_call() -> None:
-    """A revoked node is not contacted when its directory entry is removed."""
+async def test_free_revoked_object_is_rejected_without_dropping_metadata() -> None:
+    """Policy denies free on revoked nodes and keeps local metadata intact."""
     manager, directory, node, _, _ = make_manager(["node-1"])
     object_id = await manager.alloc(make_context(), "alice", 64)
-    directory.get(object_id).state = ObjectState.REVOKED
+    manager.handle_node_revoked("node-1", 42.0)
     call_count = len(node.call_log)
 
-    await manager.free(make_context(), "alice", object_id)
+    with pytest.raises(ObjectUnavailableError):
+        await manager.free(make_context(), "alice", object_id)
 
-    assert directory.get(object_id) is None
+    assert directory.get(object_id) is not None
+    assert directory.is_current(object_id, 0)
+    assert len(node.call_log) == call_count
+
+
+async def test_free_live_revoked_node_is_rejected_before_callback_delivery() -> None:
+    """Trust state blocks free even before the revocation callback arrives."""
+    manager, directory, node, _, security = make_manager(["node-1"])
+    object_id = await manager.alloc(make_context(), "alice", 64)
+    security.trust_states["node-1"] = TrustState.REVOKED
+    call_count = len(node.call_log)
+
+    with pytest.raises(ObjectUnavailableError):
+        await manager.free(make_context(), "alice", object_id)
+
+    assert directory.get(object_id) is not None
     assert len(node.call_log) == call_count
 
 

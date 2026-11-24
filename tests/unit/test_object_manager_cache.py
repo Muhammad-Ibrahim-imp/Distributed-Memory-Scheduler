@@ -115,6 +115,36 @@ async def test_free_invalidates_cache_and_later_read_is_unknown() -> None:
         await manager.read(context(), "alice", object_id)
 
 
+async def test_failed_free_keeps_directory_but_invalidates_cached_bytes() -> None:
+    """A lost free response retains retryable metadata, not stale cached data."""
+    cache = ObjectCache()
+    manager, directory, node, _ = make_manager(cache)
+    object_id = await new_object(manager, b"payload")
+    await manager.read(context(), "alice", object_id)
+    node.fail_next_free.append(DSMTimeoutError("free timed out"))
+
+    with pytest.raises(DSMTimeoutError):
+        await manager.free(context(), "alice", object_id)
+
+    assert directory.get(object_id) is not None
+    assert directory.get(object_id).version == 0
+    assert cache.get(object_id) is None
+
+
+async def test_temporary_read_disconnect_does_not_invalidate_object() -> None:
+    """A failed request alone does not turn a temporary disconnect into node failure."""
+    manager, directory, node, _ = make_manager()
+    object_id = await new_object(manager)
+    node.fail_next_read.append(DSMTimeoutError("read timed out"))
+
+    with pytest.raises(DSMTimeoutError):
+        await manager.read(context(), "alice", object_id)
+
+    assert directory.get(object_id).state.value == "ALLOCATED"
+    assert directory.get(object_id).version == 0
+    assert directory.is_current(object_id, 0)
+
+
 async def test_revocation_invalidates_cache_and_blocks_reads() -> None:
     """Revocation evicts affected entries and prevents cached reads."""
     cache = ObjectCache()

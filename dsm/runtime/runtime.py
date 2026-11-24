@@ -47,6 +47,7 @@ class Runtime:
         config: ObjectManagerConfig = ObjectManagerConfig(),
         node_timeout: float = 5.0,
         cache: ObjectCache | None = None,
+        coordinator_generation: str | None = None,
     ) -> None:
         """Initialize runtime dependencies and subscribe to node revocations."""
         self.object_manager = ObjectManager(
@@ -57,6 +58,7 @@ class Runtime:
             config=config,
             node_timeout=node_timeout,
             cache=cache,
+            coordinator_generation=coordinator_generation,
         )
         self.security = security
         register_listener = getattr(security, "register_revocation_listener", None)
@@ -69,6 +71,10 @@ class Runtime:
             register_state_listener(self.object_manager.handle_node_trust_state_changed)
         else:
             register_listener(self.object_manager.handle_node_revoked)
+
+    def start_generation(self, coordinator_generation: str) -> list[str]:
+        """Switch the runtime to a new generation and invalidate prior objects."""
+        return self.object_manager.start_generation(coordinator_generation)
 
     def bind(self, identity: str) -> "DSMHandle":
         """Return a client handle that cannot override its bound identity."""
@@ -88,6 +94,7 @@ class DSMHandle(DSMAPI):
         return RequestContext(
             identity=self._identity,
             request_id=str(uuid4()),
+            coordinator_generation=self._object_manager.coordinator_generation,
         )
 
     async def alloc(self, size: int) -> str:
