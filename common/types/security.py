@@ -80,6 +80,7 @@ class EventType(str, Enum):
     TAMPER_DETECTED = "tamper_detected"
     NODE_REGISTERED = "node_registered"
     CLIENT_REGISTERED = "client_registered"
+    COORDINATOR_STARTUP = "coordinator_startup"
     ENROLLMENT_FAILED = "enrollment_failed"
     ENROLLMENT_DENIED = "enrollment_denied"
     # Transport-layer events, reported by B1 (policy §9.2 steps 1, 2, 5).

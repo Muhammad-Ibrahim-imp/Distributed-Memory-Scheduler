@@ -26,6 +26,7 @@ DEFAULT_SEVERITY: dict[EventType, Severity] = {
     EventType.SESSION_REVOKED: Severity.INFO,
     EventType.NODE_REGISTERED: Severity.INFO,
     EventType.CLIENT_REGISTERED: Severity.INFO,
+    EventType.COORDINATOR_STARTUP: Severity.INFO,
     EventType.AUTH_FAILURE: Severity.WARNING,
     EventType.AUTHZ_DENIED: Severity.WARNING,
     EventType.RATE_LIMIT_VIOLATION: Severity.WARNING,
@@ -51,10 +52,12 @@ def token_ref(token: str) -> str:
 
 class AuditLogger:
     def __init__(self, path: str | Path, max_bytes: int = 5 * 1024 * 1024,
-                 backup_count: int = 5, clock: Callable[[], float] = time.time):
+                 backup_count: int = 5, clock: Callable[[], float] = time.time,
+                 repository=None):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._clock = clock
+        self._repository = repository
         self._listeners: list[Callable[[SecurityEvent], None]] = []
         self._logger = logging.getLogger(f"dsm.audit.{id(self)}")
         self._logger.setLevel(logging.INFO)
@@ -74,13 +77,18 @@ class AuditLogger:
             event_id="evt-" + uuid.uuid4().hex[:12], timestamp=self._clock(),
             event_type=event_type, severity=severity, actor_id=actor_id,
             result=result, request_id=request_id, extra=extra)
+        self.record_event(event)
+        return event
+
+    def record_event(self, event: SecurityEvent) -> None:
+        if self._repository is not None:
+            self._repository.add_audit_event(event)
         self._logger.info(json.dumps(event.to_dict(), sort_keys=True, default=str))
         for cb in self._listeners:
             try:
                 cb(event)
             except Exception:       # a broken listener must not break auditing
                 logging.getLogger(__name__).exception("audit listener failed")
-        return event
 
     def emit(self, event_type: EventType, actor_id: str, result: Result,
              request_id: str | None, **extra: Any) -> SecurityEvent:

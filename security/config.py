@@ -64,7 +64,7 @@ class TrustPolicy:
 
 @dataclass(frozen=True)
 class EnrollmentPolicy:
-    """Names of env vars and the denylist file. Enforcement lands in Week 5."""
+    """Names of enrollment-secret env vars and the persistent node cert denylist."""
     node_secret_env: str = "DSM_NODE_ENROLLMENT_SECRET"
     client_secret_env: str = "DSM_CLIENT_ENROLLMENT_SECRET"
     denylist_path: str = "data/denylist.json"
@@ -78,6 +78,12 @@ class AuditPolicy:
 
 
 @dataclass(frozen=True)
+class PersistencePolicy:
+    backend: str = "sqlite"
+    database_path: str = "data/security/security.db"
+
+
+@dataclass(frozen=True)
 class SecurityConfig:
     token: TokenPolicy = field(default_factory=TokenPolicy)
     replay_protection: ReplayPolicy = field(default_factory=ReplayPolicy)
@@ -85,6 +91,7 @@ class SecurityConfig:
     trust_state: TrustPolicy = field(default_factory=TrustPolicy)
     enrollment: EnrollmentPolicy = field(default_factory=EnrollmentPolicy)
     audit: AuditPolicy = field(default_factory=AuditPolicy)
+    persistence: PersistencePolicy = field(default_factory=PersistencePolicy)
     token_key: str | None = None         # from DSM_TOKEN_KEY; None => ephemeral dev key
 
 
@@ -94,7 +101,7 @@ def load_security_config(path: str | Path | None = None) -> SecurityConfig:
         with open(path, "r", encoding="utf-8") as fh:
             raw = yaml.safe_load(fh) or {}
     unknown = set(raw) - {"token", "replay_protection", "rate_limit", "trust_state",
-                          "enrollment", "audit"}
+                          "enrollment", "audit", "persistence"}
     if unknown:
         raise ValueError(f"unknown top-level security config keys: {sorted(unknown)}")
     rl = raw.get("rate_limit") or {}
@@ -110,5 +117,6 @@ def load_security_config(path: str | Path | None = None) -> SecurityConfig:
         trust_state=TrustPolicy(suspicious_trigger=trig, **trust),
         enrollment=_build(EnrollmentPolicy, raw.get("enrollment")),
         audit=_build(AuditPolicy, raw.get("audit")),
+        persistence=_build(PersistencePolicy, raw.get("persistence")),
         token_key=os.environ.get("DSM_TOKEN_KEY") or None,
     )

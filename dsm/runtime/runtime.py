@@ -25,6 +25,11 @@ class RevocationRegistrar(Protocol):
     ) -> None:
         """Register a callback invoked with a revoked node id and timestamp."""
 
+    def register_state_listener(
+        self,
+        callback: Callable,
+    ) -> None: ...
+
 
 class RuntimeSecurity(AccessChecker, RevocationRegistrar, Protocol):
     """Security dependencies needed by the runtime."""
@@ -59,7 +64,11 @@ class Runtime:
             raise TypeError(
                 "security must provide register_revocation_listener(callback)"
             )
-        register_listener(self.object_manager.handle_node_revoked)
+        register_state_listener = getattr(security, "register_state_listener", None)
+        if callable(register_state_listener):
+            register_state_listener(self.object_manager.handle_node_trust_state_changed)
+        else:
+            register_listener(self.object_manager.handle_node_revoked)
 
     def bind(self, identity: str) -> "DSMHandle":
         """Return a client handle that cannot override its bound identity."""

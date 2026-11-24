@@ -6,13 +6,15 @@ services:
       SERVICE_ROLE: coordinator
       SECURITY_PORT: "8443"
       DSM_TOKEN_KEY: ${DSM_TOKEN_KEY:-}      
-      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:-}
-      DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:-}
+      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
+      DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:?set DSM_CLIENT_ENROLLMENT_SECRET in .env}
     ports:
       - "8443:8443"
     volumes:
       - ./configs:/app/configs:ro
-      - ./certs:/app/certs:ro
+      - ./certs/ca.pem:/app/certs/ca.pem:ro
+      - ./certs/server.pem:/app/certs/server.pem:ro
+      - ./certs/server.key:/app/certs/server.key:ro
       - coordinator-data:/app/data
     networks: [dsm-net]
 
@@ -23,10 +25,14 @@ services:
       SERVICE_ROLE: node
       SECURITY_HOST: coordinator
       SECURITY_PORT: "8443"
-      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:-}
+      DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
       NODE_ID: "node-1"
+      DSM_NODE_CERT_FILE: /app/certs/nodes/node-1.pem
+      DSM_NODE_KEY_FILE: /app/certs/nodes/node-1.key
     volumes:
-      - ./certs:/app/certs:ro
+      - ./certs/ca.pem:/app/certs/ca.pem:ro
+      - ./certs/nodes/node-1.pem:/app/certs/nodes/node-1.pem:ro
+      - ./certs/nodes/node-1.key:/app/certs/nodes/node-1.key:ro
     mem_limit: 512m
     depends_on: [coordinator]
     networks: [dsm-net]
@@ -37,8 +43,11 @@ services:
     environment:
       SECURITY_HOST: coordinator
       SECURITY_PORT: "8443"
+      DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:?set DSM_CLIENT_ENROLLMENT_SECRET in .env}
     volumes:
-      - ./certs:/app/certs:ro
+      - ./certs/ca.pem:/app/certs/ca.pem:ro
+      - ./certs/client.pem:/app/certs/client.pem:ro
+      - ./certs/client.key:/app/certs/client.key:ro
     depends_on: [coordinator]
     networks: [dsm-net]
 

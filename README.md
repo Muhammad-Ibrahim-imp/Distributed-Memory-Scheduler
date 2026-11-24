@@ -1541,3 +1541,24 @@ The intended distribution is approximately balanced: **A1 gets additional node-l
 Before running the coordinator or network tests, generate the local dev certificates:
 ```cmd
 python scripts/gen_certs.py
+```
+
+This creates a development CA, server and client certificates, and a unique `node-1` certificate. To provision another node, issue a separate certificate with the existing dev CA:
+
+```cmd
+python scripts/gen_certs.py --issue-node node-2
+```
+
+Never reuse a node certificate on another machine. Keep `certs/` private; it contains private keys and is excluded from Git and Docker build contexts. Distribute only each node's own certificate/key and the CA certificate to that node.
+
+Set different random values of at least 32 bytes for `DSM_NODE_ENROLLMENT_SECRET` and `DSM_CLIENT_ENROLLMENT_SECRET` in `.env` before running Docker Compose. Start from `.env.example`; do not commit the populated `.env` file. The coordinator refuses to start if either secret is missing or too short.
+
+### Coordinator security persistence
+
+Coordinator identities, trust decisions, node certificate bans, and security
+audit events are stored in SQLite at `data/security/security.db` by default.
+The database path is configurable in `configs/security.yaml`; Docker Compose
+keeps `/app/data` on the `coordinator-data` volume. Active sessions, tokens,
+connections, replay windows, heartbeats, and resource statistics remain
+ephemeral. See [docs/SECURITY_PERSISTENCE.md](docs/SECURITY_PERSISTENCE.md) for
+restart behavior, storage boundaries, and integration contracts.

@@ -14,5 +14,17 @@ __pycache__/
 venv/
 
 data/
+*.db
+*.db-wal
+*.db-shm
+*.db.initialized
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite.initialized
 logs/
-certs/repomix-output.xml
+certs/
+.vscode/
+.env
+.env.*
+!.env.example

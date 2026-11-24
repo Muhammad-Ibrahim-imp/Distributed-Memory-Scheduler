@@ -6,6 +6,9 @@ import asyncio
 import ssl
 from security.bootstrap import build_security_core
 from security.config import load_security_config
+from security.authentication.enrollment import EnrollmentGuard
+from security.persistence import SecurityRepository
+from security.persistence.database import SecurityDatabase, SecurityPersistenceError
 from security.quarantine.trust_state import TrustStateMachine
 from network.tcp.coordinator import CoordinatorServer, NodeRouter
 from network.tcp.node_client import NodeClient
@@ -80,11 +83,18 @@ async def main():
 
     # 1. M5 Security
     security_config = load_security_config("configs/security.yaml")
-    trust_state = TrustStateMachine(security_config.trust_state)
+    if security_config.persistence.backend != "sqlite":
+        raise SecurityPersistenceError("unsupported security persistence backend")
+    database = SecurityDatabase(security_config.persistence.database_path)
+    repository = SecurityRepository(database)
+    enrollment = EnrollmentGuard(security_config.enrollment, repository=repository)
+    trust_state = TrustStateMachine(security_config.trust_state, repository=repository)
     core = build_security_core(
-        config=security_config, trust=trust_state, set_default_audit=True
+        config=security_config, trust=trust_state, set_default_audit=True,
+        repository=repository,
     )
     trust_state.attach_audit(core.audit)
+    core.audit.emit(EventType.COORDINATOR_STARTUP, "coordinator", Result.SUCCESS, "-")
     sec_wrapper = SecurityWrapper(core, trust_state)
 
     # 2. B1 Network
@@ -115,17 +125,18 @@ async def main():
     # 6. B1 Server
     server = CoordinatorServer(
         host=host, port=port, auth_service=core.auth,
-        runtime=runtime, registry=registry, trust=sec_provider, audit=core.audit
+        runtime=runtime, registry=registry, trust=sec_provider, audit=core.audit,
+        enrollment=enrollment,
     )
 
     # 7. TLS Error Handler
     loop = asyncio.get_running_loop()
 
-    def close_revoked_node(identity, timestamp):
-        loop.create_task(server.force_close_connection(identity))
-
-    trust_state.register_revocation_listener(close_revoked_node)
-
+    trust_state.set_force_close_connection(server.force_close_connection)
+    trust_state.register_revocation_listener(enrollment.record_revocation)
+    trust_state.register_revocation_listener(
+        lambda identity, _timestamp: core.auth.revoke_identity(identity, "trust_state_revoked")
+    )
     def tls_error_handler(loop, context):
         exc = context.get("exception")
         if isinstance(exc, ssl.SSLError):
@@ -153,6 +164,8 @@ async def main():
         probe.stop()
         probe_task.cancel()
         await server.stop()
+        core.audit.close()
+        repository.close()
 
 
 if __name__ == "__main__":
