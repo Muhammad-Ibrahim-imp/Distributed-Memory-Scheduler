@@ -2,11 +2,10 @@ import asyncio
 import time
 
 from common.protocol import dsm_pb2
-from common.types.errors import TokenExpiredError
-from network.security.tls import client_context
 from network.tcp.connection import Connection
 from network.tcp.errors import code_to_error
-
+from network.security.tls import client_context
+from common.types.errors import TokenExpiredError
 
 class RemoteDSMAPI:
     def __init__(self, host, port, label, enrollment_secret, refresh_callback=None):
@@ -16,7 +15,8 @@ class RemoteDSMAPI:
         self.token: str | None = None
         self.credential: str | None = None
         self.connection: Connection | None = None
-        self.refresh_callback = refresh_callback   # optional override; default is the built-in refresh
+        self.refresh_callback = refresh_callback
+        self.coordinator_generation: str = ""
         self._counter = 0
 
     async def connect(self):
@@ -26,7 +26,6 @@ class RemoteDSMAPI:
         self.connection = Connection(reader, writer)
         self.connection.start()
         await self._register()
-        await self._refresh()
 
     async def close(self):
         if self.connection:
@@ -43,6 +42,7 @@ class RemoteDSMAPI:
         env.token = self.token or ""
         env.nonce = self._rid()
         env.timestamp = time.time()
+        env.coordinator_generation = self.coordinator_generation
         return env
 
     async def _register(self):
@@ -51,34 +51,24 @@ class RemoteDSMAPI:
         env.register.enrollment_secret = self.enrollment_secret
         env.register.role = "client"
         env.register.label = self.label
+        env.register.client_nonce = f"nonce-{time.time_ns()}"
         resp = await self.connection.call(env)
         if resp.WhichOneof("payload") == "error":
             raise RuntimeError(f"register failed: {resp.error.message}")
         self.identity = resp.register_response.identity
         self.credential = resp.register_response.credential
 
-    async def _refresh(self):
-        """Exchange the credential for a fresh token."""
-        if self.refresh_callback is not None:
-            self.token = self.refresh_callback(self.token)
-            return
-        env = self._env()
-        env.refresh.request_id = self._rid()
-        env.refresh.identity = self.identity or ""
-        env.refresh.credential = self.credential or ""
-        resp = await self.connection.call(env)
-        if resp.WhichOneof("payload") == "error":
-            raise code_to_error(resp.error.code, resp.error.message)
-        self.token = resp.refresh_response.token
-
     async def _call(self, env):
-        resp = await self.connection.call(env)
+        try:
+            resp = await self.connection.call(env)
+        except Exception:
+            raise
         if resp.WhichOneof("payload") == "error":
             err = code_to_error(resp.error.code, resp.error.message)
-            if isinstance(err, TokenExpiredError):
-                await self._refresh()
+            if isinstance(err, TokenExpiredError) and self.refresh_callback is not None:
+                self.token = self.refresh_callback(self.identity, self.credential)
                 env.token = self.token
-                env.nonce = self._rid()   # NEW nonce; SAME request_id
+                env.nonce = self._rid()
                 resp = await self.connection.call(env)
                 if resp.WhichOneof("payload") == "error":
                     raise code_to_error(resp.error.code, resp.error.message)
@@ -90,7 +80,7 @@ class RemoteDSMAPI:
         env = self._env()
         env.alloc.request_id = self._rid()
         env.alloc.size = size
-        return (await self._call(env)).allocate_response.object_id
+        return (await self._call(env)).alloc_response.object_id
 
     async def read(self, object_id: str) -> bytes:
         env = self._env()

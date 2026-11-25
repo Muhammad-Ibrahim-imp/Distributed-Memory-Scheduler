@@ -7,13 +7,11 @@ from network.serialization.framing import read_frame, write_frame
 
 DEFAULT_TIMEOUT = 10.0
 
-
 def request_id_of(env: dsm_pb2.Envelope) -> str | None:
     field = env.WhichOneof("payload")
     if field is None:
         return None
     return getattr(getattr(env, field), "request_id", None)
-
 
 class Connection:
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -22,6 +20,7 @@ class Connection:
         self._handler: Callable[[dsm_pb2.Envelope], Awaitable[None]] | None = None
         self._reader_task: asyncio.Task | None = None
         self._closed = False
+        self.on_close: Callable[[], Awaitable[None]] | None = None # ADDED
 
     def set_handler(self, handler):
         self._handler = handler
@@ -48,6 +47,8 @@ class Connection:
                 if not fut.done():
                     fut.set_exception(ConnectionError("connection closed"))
             self._pending.clear()
+            if self.on_close: # ADDED
+                asyncio.create_task(self.on_close())
 
     async def send(self, env: dsm_pb2.Envelope) -> None:
         await write_frame(self.writer, env.SerializeToString())
