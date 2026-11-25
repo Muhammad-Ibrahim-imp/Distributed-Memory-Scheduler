@@ -82,6 +82,14 @@ class CoordinatorServer:
             if cert:
                 fingerprint = hashlib.sha256(cert).hexdigest()
 
+        async def on_disconnect():
+            for identity, active_conn in list(self._connections.items()):
+                if active_conn is conn:
+                    self._connections.pop(identity, None)
+                    self.registry.unregister(identity)
+                    break
+
+        conn.on_close = on_disconnect
         conn.set_handler(lambda env, c=conn, f=fingerprint, ip=peer_ip: self._handle(env, c, f, ip))
         conn.start()
 
@@ -105,6 +113,17 @@ class CoordinatorServer:
             return
         elif field == "node_stats":
             self.registry.set_stats(env.node_stats.node_id, env.node_stats)
+            return
+        elif field == "security_event":
+            if self.audit is not None:
+                event = env.security_event
+                try:
+                    self.audit.log_security_event(
+                        EventType(event.event_type), event.actor_id, Severity(event.severity),
+                        Result(event.result), event.request_id, **dict(event.extra),
+                    )
+                except (ValueError, TypeError):
+                    pass
             return
 
         # 2. Main Security Pipeline
@@ -156,8 +175,8 @@ class CoordinatorServer:
             if field == "alloc":
                 obj_id = await dsm.alloc(env.alloc.size)
                 resp = dsm_pb2.Envelope()
-                resp.allocate_response.request_id = rid
-                resp.allocate_response.object_id = obj_id
+                resp.alloc_response.request_id = rid
+                resp.alloc_response.object_id = obj_id
             elif field == "read":
                 data = await dsm.read(env.read.object_id)
                 resp = dsm_pb2.Envelope()

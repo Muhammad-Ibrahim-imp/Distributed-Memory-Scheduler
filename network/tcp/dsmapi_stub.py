@@ -19,6 +19,7 @@ class RemoteDSMAPI:
         self.credential: str | None = None
         self.connection: Connection | None = None
         self.refresh_callback = refresh_callback   # optional override; default is the built-in refresh
+        self.coordinator_generation = ""
         self._counter = 0
 
     async def connect(self):
@@ -48,6 +49,7 @@ class RemoteDSMAPI:
         env.token = self.token or ""
         env.nonce = self._rid()
         env.timestamp = time.time()
+        env.coordinator_generation = self.coordinator_generation
         return env
 
     async def _register(self):
@@ -98,7 +100,7 @@ class RemoteDSMAPI:
         env = self._env()
         env.alloc.request_id = self._rid()
         env.alloc.size = size
-        return (await self._call(env)).allocate_response.object_id
+        return (await self._call(env)).alloc_response.object_id
 
     async def read(self, object_id: str) -> bytes:
         env = self._env()

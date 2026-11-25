@@ -23,6 +23,7 @@ class NodeService:
         self.heartbeat_interval = heartbeat_interval
         self.identity: str | None = None
         self.credential: str | None = None
+        self.coordinator_generation = ""
         self.connection: Connection | None = None
         self._stop = asyncio.Event()
 
@@ -49,6 +50,7 @@ class NodeService:
         else:
             await self._register(conn)
         hb = asyncio.create_task(self._heartbeat_loop())
+        ev = asyncio.create_task(self._event_sender_loop()) if self.event_queue is not None else None
         stopped = asyncio.create_task(self._stop.wait())
         try:
             await asyncio.wait((stopped, conn._reader_task), return_when=asyncio.FIRST_COMPLETED)
@@ -57,6 +59,8 @@ class NodeService:
             with suppress(asyncio.CancelledError):
                 await stopped
             hb.cancel()
+            if ev is not None:
+                ev.cancel()
             await conn.close()
 
     async def _refresh(self, conn: Connection):
@@ -90,7 +94,8 @@ class NodeService:
         print(f"[node] registered as {self.identity}")
 
     def _ctx(self, rid: str) -> RequestContext:
-        return RequestContext(identity="coordinator", request_id=rid)
+        return RequestContext(identity="coordinator", request_id=rid,
+                              coordinator_generation=self.coordinator_generation)
 
     async def _handle(self, env: dsm_pb2.Envelope):
         field = env.WhichOneof("payload")
@@ -98,14 +103,15 @@ class NodeService:
             return
         req = getattr(env, field)
         rid = req.request_id
+        self.coordinator_generation = env.coordinator_generation
         ctx = self._ctx(rid)
         print(f"[node {self.label}] {field} {req.object_id}")
         resp = dsm_pb2.Envelope()
         try:
             if field == "alloc":
                 await self.memory_node.alloc(ctx, req.object_id, req.owner_identity, req.size)
-                resp.allocate_response.request_id = rid
-                resp.allocate_response.object_id = req.object_id
+                resp.alloc_response.request_id = rid
+                resp.alloc_response.object_id = req.object_id
             elif field == "read":
                 data = await self.memory_node.read(ctx, req.object_id, req.owner_identity)
                 resp.read_response.request_id = rid
@@ -150,6 +156,24 @@ class NodeService:
                 await asyncio.wait_for(self._stop.wait(), timeout=self.heartbeat_interval)
             except asyncio.TimeoutError:
                 pass
+
+    async def _event_sender_loop(self):
+        while not self._stop.is_set():
+            event = await self.event_queue.get()
+            env = dsm_pb2.Envelope()
+            env.identity = self.identity or ""
+            env.timestamp = time.time()
+            proto_event = env.security_event
+            proto_event.event_id = event.event_id
+            proto_event.timestamp = event.timestamp
+            proto_event.event_type = event.event_type.value
+            proto_event.severity = event.severity.value
+            proto_event.actor_id = event.actor_id
+            proto_event.result = event.result.value
+            proto_event.request_id = event.request_id
+            for key, value in event.extra.items():
+                proto_event.extra[key] = str(value)
+            await self.connection.send(env)
 
     def stop(self):
         self._stop.set()
