@@ -9,7 +9,7 @@ Work is being delivered in independently tested milestones on `main`.
 | 3. A1 generation-tagged allocations and cleanup | Pending | Generation-tagged node storage, secure obsolete cleanup and accounting are not implemented. |
 | 4. A2 incarnation, directory, cache and recovery | Pending | Context semantics and generation checks are implemented; incarnation-aware allocation recovery and all failure integration remain. |
 | 5. B2 readiness and scheduler eligibility | Pending | Fresh generation-tagged heartbeat, cleanup completion and explicit readiness are incomplete. |
-| 6. Integration, application regression and LAN operations | Pending | Full suite, all lifecycle scenarios, reusable startup scripts and LAN guide updates remain. |
+| 6. Integration, application regression and LAN operations | In progress | Full pytest suite passes on this revision. Remaining lifecycle scenario matrix, application workload verification, reusable startup scripts and LAN guide updates are pending. |
 
 ## Milestone 1 evidence
 
