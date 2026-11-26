@@ -14,6 +14,8 @@ __pycache__/
 .venv-lan/
 .test-tmp/
 venv/
+requirements-lan.txt
+requirements-lan.lock.txt
 
 data/
 *.db
