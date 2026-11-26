@@ -85,6 +85,26 @@ class EnrollmentGuard:
             raise EnrollmentDenied
         self._fingerprints_by_identity[identity] = fingerprint
 
+    def identity_for_reenrollment(self, secret: str, cert_fingerprint: str,
+                                  label: str | None = None) -> str | None:
+        """Resolve a returning node only from its verified certificate and factor."""
+        expected = self._secrets[Role.NODE]
+        if not secret or not hmac.compare_digest(secret, expected):
+            raise EnrollmentDenied
+        fingerprint = self._normalize_fingerprint(cert_fingerprint)
+        if (fingerprint in self._denied_fingerprints or
+                (self._repository is not None and
+                 self._repository.has_ban(fingerprint, "node_certificate"))):
+            raise EnrollmentDenied
+        identity = (self._repository.get_node_identity_for_certificate(fingerprint)
+                    if self._repository is not None else
+                    next((key for key, value in self._fingerprints_by_identity.items()
+                          if hmac.compare_digest(value, fingerprint)), None))
+        if identity is None:
+            return None
+        # A label may detect operator misconfiguration, but never authenticates identity.
+        return identity
+
     def record_revocation(self, identity: str, _timestamp: float) -> None:
         fingerprint = (self._repository.get_node_certificate(identity) if self._repository is not None
                        else self._fingerprints_by_identity.get(identity))

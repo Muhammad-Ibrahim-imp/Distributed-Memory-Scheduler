@@ -29,10 +29,10 @@ message Envelope {
   }
 }
 
-message Register { string request_id = 1; string enrollment_secret = 2; string role = 3; string label = 4; string client_nonce = 5; }
+message Register { string request_id = 1; string enrollment_secret = 2; string role = 3; string label = 4; string client_nonce = 5; bool reauthenticate = 6; }
 message RegisterResponse { string request_id = 1; string identity = 2; string credential = 3; }
-message Refresh { string request_id = 1; string identity = 2; string credential = 3; }
-message RefreshResponse { string request_id = 1; string token = 2; }
+message Refresh { string request_id = 1; string identity = 2; string credential = 3; string enrollment_secret = 4; string coordinator_generation = 5; }
+message RefreshResponse { string request_id = 1; string token = 2; string credential = 3; }
 message AllocateRequest { string request_id = 1; string object_id = 2; uint64 size = 3; string owner_identity = 4; }
 message AllocateResponse { string request_id = 1; string object_id = 2; }
 message ReadRequest { string request_id = 1; string object_id = 2; string owner_identity = 3; }

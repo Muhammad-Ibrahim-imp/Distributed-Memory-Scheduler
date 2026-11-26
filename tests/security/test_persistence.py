@@ -279,3 +279,29 @@ def test_corrupt_database_fails_closed_without_replacement(tmp_path):
     with pytest.raises(SecurityPersistenceError):
         SecurityDatabase(path)
     assert path.read_bytes() == b"not a sqlite database"
+
+
+def test_node_reauthentication_rotates_persisted_credential_only(tmp_path):
+    path = tmp_path / "security.db"
+    cfg = SecurityConfig(audit=AuditPolicy(path=str(tmp_path / "audit.jsonl")),
+                         token_key=TokenService.generate_key())
+    repo = repository(path)
+    core = build_security_core(cfg, repository=repo)
+    original = core.auth.register(Role.NODE, "returning-node", certificate_fingerprint="a" * 64)
+    rotated = core.auth.reauthenticate_node(original.identity, "restart")
+    retry = core.auth.reauthenticate_node(original.identity, "lost-response-retry")
+    assert retry.identity == rotated.identity == original.identity
+    assert retry.credential != rotated.credential != original.credential
+    assert core.identities.verify(original.identity, rotated.credential) is None
+    assert core.identities.verify(original.identity, original.credential) is None
+    assert core.identities.verify(original.identity, retry.credential) is not None
+    assert repo.get_node_certificate(original.identity) == "a" * 64
+    core.audit.close()
+    repo.close()
+
+    repo = repository(path)
+    core = build_security_core(cfg, repository=repo)
+    assert core.identities.verify(original.identity, original.credential) is None
+    assert core.identities.verify(original.identity, retry.credential) is not None
+    core.audit.close()
+    repo.close()

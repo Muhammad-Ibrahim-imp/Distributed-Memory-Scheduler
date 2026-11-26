@@ -41,6 +41,15 @@ class SecurityRepository:
         ).fetchone())
         return row[0] if row else None
 
+    def rotate_credential(self, identity: str, credential_hash: str) -> bool:
+        def write(db):
+            cursor = db.execute(
+                "UPDATE identities SET credential_hash=? WHERE identity=? AND role=? AND revoked=0",
+                (credential_hash, identity, Role.NODE.value),
+            )
+            return cursor.rowcount == 1
+        return self.database.run(write)
+
     def get_node_identity_for_certificate(self, fingerprint: str) -> str | None:
         row = self.database.run(lambda db: db.execute(
             "SELECT identity FROM node_certificates WHERE fingerprint=?", (fingerprint,)

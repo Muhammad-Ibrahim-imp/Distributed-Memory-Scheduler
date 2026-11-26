@@ -68,6 +68,18 @@ class AuthService:
                          session_id=session.session_id, token_ref=token_ref(token))
         return AuthResult(token, session.session_id, identity, ident.role, session.expires_at)
 
+    def reauthenticate_node(self, identity: str, request_id: str | None = None) -> RegistrationResult:
+        """Rotate the node's one-time credential after certificate-bound proof."""
+        self._check_trust(identity, request_id)
+        ident = self._ids.get(identity)
+        if ident is None or ident.role is not Role.NODE or ident.revoked:
+            raise AuthenticationError("authentication failed")
+        credential = self._ids.rotate_credential(identity)
+        if credential is None:
+            raise AuthenticationError("authentication failed")
+        self._sessions.revoke_all(identity, "credential_rotated")
+        return RegistrationResult(identity, ident.label, ident.role, credential)
+
     def validate(self, token: str, claimed_identity: str | None = None,
                  request_id: str | None = None) -> TokenClaims:
         if claimed_identity is not None:

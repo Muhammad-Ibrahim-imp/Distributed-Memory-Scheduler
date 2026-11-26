@@ -20,7 +20,8 @@ class Connection:
         self._handler: Callable[[dsm_pb2.Envelope], Awaitable[None]] | None = None
         self._reader_task: asyncio.Task | None = None
         self._closed = False
-        self.on_close: Callable[[], Awaitable[None]] | None = None # ADDED
+        self.on_close: Callable[[], Awaitable[None]] | None = None
+        self._handlers: set[asyncio.Task] = set()
 
     def set_handler(self, handler):
         self._handler = handler
@@ -39,7 +40,9 @@ class Connection:
                 if fut is not None and not fut.done():
                     fut.set_result(env)
                 elif self._handler is not None:
-                    asyncio.create_task(self._handler(env))
+                    task = asyncio.create_task(self._handler(env))
+                    self._handlers.add(task)
+                    task.add_done_callback(self._handlers.discard)
         except (asyncio.IncompleteReadError, ConnectionError, OSError):
             pass
         finally:
@@ -47,8 +50,8 @@ class Connection:
                 if not fut.done():
                     fut.set_exception(ConnectionError("connection closed"))
             self._pending.clear()
-            if self.on_close: # ADDED
-                asyncio.create_task(self.on_close())
+            if self.on_close:
+                await self.on_close()
 
     async def send(self, env: dsm_pb2.Envelope) -> None:
         await write_frame(self.writer, env.SerializeToString())
@@ -78,3 +81,11 @@ class Connection:
             await self.writer.wait_closed()
         except (ConnectionError, OSError):
             pass
+        if self._reader_task and self._reader_task is not asyncio.current_task():
+            await asyncio.gather(self._reader_task, return_exceptions=True)
+        current = asyncio.current_task()
+        handlers = tuple(task for task in self._handlers if task is not current)
+        for task in handlers:
+            task.cancel()
+        if handlers:
+            await asyncio.gather(*handlers, return_exceptions=True)

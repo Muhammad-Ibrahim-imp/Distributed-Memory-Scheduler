@@ -63,6 +63,20 @@ class IdentityStore:
     def get(self, identity: str) -> Identity | None:
         return self._by_id.get(identity)
 
+    def rotate_credential(self, identity: str) -> str | None:
+        """Issue a fresh credential without changing identity or security history."""
+        ident = self._by_id.get(identity)
+        if ident is None or ident.revoked:
+            return None
+        credential = secrets.token_urlsafe(32)
+        updated = Identity(ident.identity, ident.label, ident.role,
+                           hash_credential(credential), ident.created_at, ident.revoked)
+        if self._repository is not None and not self._repository.rotate_credential(
+                identity, updated.credential_hash):
+            return None
+        self._by_id[identity] = updated
+        return credential
+
     def verify(self, identity: str, credential: str) -> Identity | None:
         """Unknown id and wrong credential take the same path (one compare either way)."""
         ident = self._by_id.get(identity)

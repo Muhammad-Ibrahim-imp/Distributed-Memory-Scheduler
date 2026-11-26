@@ -242,8 +242,7 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         )
         await client.write(placement_ids[0], b"quarantine-readable")
 
-        # Three bad credentials trigger SUSPICIOUS; the next violation
-        # follows the policy transition to QUARANTINED.
+        # Three failures mark SUSPICIOUS; the next moves it to QUARANTINED.
         for _ in range(4):
             await _send_bad_node_refresh(port, cert_dir, target_index, target_node_identity)
         with pytest.raises(ObjectUnavailableError):

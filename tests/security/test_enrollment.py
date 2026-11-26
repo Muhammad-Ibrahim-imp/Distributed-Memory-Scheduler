@@ -91,6 +91,9 @@ def test_certificate_binding_persists_and_blocks_duplicate_enrollment(tmp_path):
     repo = SecurityRepository(SecurityDatabase(path))
     guard = EnrollmentGuard(policy, env, repo)
     assert repo.get_node_certificate(node.identity) == fingerprint
+    assert guard.identity_for_reenrollment(env[policy.node_secret_env], fingerprint) == node.identity
+    with pytest.raises(EnrollmentDenied):
+        guard.identity_for_reenrollment("incorrect-recovery-secret", fingerprint)
     assert guard.authorize_node_reconnect(node.identity, fingerprint) is None
     with pytest.raises(EnrollmentDenied):
         guard.authorize(Role.NODE, env[policy.node_secret_env], fingerprint)

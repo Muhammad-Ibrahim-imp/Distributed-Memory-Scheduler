@@ -116,6 +116,28 @@ def test_only_revoked_trust_state_is_a_hard_stop(core, trust):
         core.auth.authenticate(r.identity, r.credential)
     evs = events(core)
     assert any(e["event_type"] == "authz_denied" and e["extra"]["reason"] == "trust_state_revoked" for e in evs)
+
+
+def test_node_reauthentication_rotates_credential_without_clearing_quarantine(core, trust):
+    node = core.auth.register(Role.NODE, "returning-node")
+    trust.states[node.identity] = TrustState.QUARANTINED
+
+    recovered = core.auth.reauthenticate_node(node.identity, "restart-recovery")
+
+    assert recovered.identity == node.identity
+    assert recovered.credential != node.credential
+    assert core.identities.verify(node.identity, node.credential) is None
+    assert core.identities.verify(node.identity, recovered.credential) is not None
+    assert trust.get_trust_state(node.identity) is TrustState.QUARANTINED
+    session = core.auth.authenticate(node.identity, recovered.credential)
+    assert core.auth.validate(session.token).identity == node.identity
+
+
+def test_revoked_node_cannot_rotate_credential(core, trust):
+    node = core.auth.register(Role.NODE, "revoked-node")
+    trust.states[node.identity] = TrustState.REVOKED
+    with pytest.raises(IdentityBlockedError):
+        core.auth.reauthenticate_node(node.identity, "revoked-recovery")
     assert types(core).count("auth_failure") == 0                   # rejected before credential work
 
 

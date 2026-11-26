@@ -4,4 +4,6 @@ from dataclasses import dataclass
 class RequestContext:
     identity: str
     request_id: str
-    coordinator_generation: str = ""
+    # None is reserved for trusted in-process callers; network boundaries must
+    # supply and validate an explicit active generation.
+    coordinator_generation: str | None = None

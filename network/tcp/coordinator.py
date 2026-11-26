@@ -48,6 +48,7 @@ class CoordinatorServer:
         self.replay = ReplayGuard()
         self._server = None
         self._connections: dict[str, Connection] = {}
+        self._identity_lock = asyncio.Lock()
 
     async def start(self):
         from network.security.tls import server_context
@@ -199,6 +200,48 @@ class CoordinatorServer:
 
     async def _handle_register(self, env, conn, cert_fingerprint, peer_ip):
         rid = env.register.request_id
+        async with self._identity_lock:
+            await self._register_locked(env, conn, cert_fingerprint, peer_ip, rid)
+
+    async def _register_locked(self, env, conn, cert_fingerprint, peer_ip, rid):
+        try:
+            if (env.register.role != Role.NODE.value or
+                    not env.register.reauthenticate):
+                existing = None
+            else:
+                existing = self.enrollment.identity_for_reenrollment(
+                    env.register.enrollment_secret, cert_fingerprint, env.register.label)
+        except EnrollmentDenied:
+            existing = None
+            # Continue through first-enrollment authorization for unknown certificates;
+            # known banned certificates remain denied there as well.
+            try:
+                self.enrollment.authorize(Role.NODE, env.register.enrollment_secret,
+                                          cert_fingerprint, env.register.label)
+            except EnrollmentDenied:
+                await self._audit("enrollment_denied", env, "rejected",
+                                  actor_id=f"ip:{peer_ip}", reason="registration_denied")
+                await self._send_auth_error(conn, env, "registration denied")
+                return
+        if existing is not None:
+            try:
+                result = self.auth_service.reauthenticate_node(existing, rid)
+                old = self._connections.get(existing)
+                if old is not None and old is not conn:
+                    await old.close()
+                resp = dsm_pb2.Envelope()
+                resp.register_response.request_id = rid
+                resp.register_response.identity = result.identity
+                resp.register_response.credential = result.credential
+                resp.coordinator_generation = self.generation.value
+                await conn.send(resp)
+                self._connections[existing] = conn
+                self.registry.register(existing, conn)
+                print(f"[auth] returning node recovered identity={existing} "
+                      f"generation={self.generation.value}")
+            except Exception:
+                await self._send_auth_error(conn, env, "registration denied")
+            return
         try:
             role = self.enrollment.authorize(
                 env.register.role, env.register.enrollment_secret, cert_fingerprint,
@@ -209,7 +252,7 @@ class CoordinatorServer:
                 "enrollment_denied", env, "rejected", actor_id=f"ip:{peer_ip}",
                 reason="registration_denied",
             )
-            await self._send_error(conn, env, "AUTH_REJECTED", "registration denied")
+            await self._send_auth_error(conn, env, "registration denied")
             return
 
         try:
@@ -223,6 +266,7 @@ class CoordinatorServer:
             resp.register_response.request_id = rid
             resp.register_response.identity = result.identity
             resp.register_response.credential = result.credential
+            resp.coordinator_generation = self.generation.value
             await conn.send(resp)
             self._connections[result.identity] = conn
             if role is Role.NODE:
@@ -233,27 +277,69 @@ class CoordinatorServer:
     async def _handle_refresh(self, env, conn, cert_fingerprint):
         """Credential -> fresh token (policy section 3.3). Pre-auth message."""
         rid = env.refresh.request_id
-        try:
-            result = self.auth_service.authenticate(
-                env.refresh.identity, env.refresh.credential, rid
-            )
-        except Exception:
-            await self._send_error(conn, env, "AUTH_REJECTED", "authentication failed")
+        prior_generation = env.refresh.coordinator_generation
+        recovery = bool(prior_generation and prior_generation != self.generation.value)
+        print(f"[auth] refresh request={rid} identity={env.refresh.identity} "
+              f"prior_generation={prior_generation or '<missing>'} "
+              f"active_generation={self.generation.value} recovery={recovery}")
+        if recovery:
+            async with self._identity_lock:
+                try:
+                    bound_identity = self.enrollment.identity_for_reenrollment(
+                        env.refresh.enrollment_secret, cert_fingerprint)
+                    if bound_identity != env.refresh.identity:
+                        raise EnrollmentDenied
+                    print(f"[auth] recovery factors accepted request={rid} identity={bound_identity}")
+                    registration = self.auth_service.reauthenticate_node(bound_identity, rid)
+                    result = self.auth_service.authenticate(
+                        bound_identity, registration.credential, rid)
+                except Exception as exc:
+                    print(f"[auth] recovery rejected request={rid} "
+                          f"identity={env.refresh.identity} reason={type(exc).__name__}")
+                    await self._send_auth_error(conn, env, "authentication failed")
+                    return
+                old = self._connections.get(bound_identity)
+                if old is not None and old is not conn:
+                    await old.close()
+                self._connections[bound_identity] = conn
+                self.registry.register(bound_identity, conn)
+                resp = dsm_pb2.Envelope()
+                resp.refresh_response.request_id = rid
+                resp.refresh_response.token = result.token
+                resp.refresh_response.credential = registration.credential
+                resp.coordinator_generation = self.generation.value
+                await conn.send(resp)
+                print(f"[auth] recovery complete request={rid} identity={bound_identity} "
+                      f"generation={self.generation.value}")
             return
-        if result.role is Role.NODE:
+        async with self._identity_lock:
             try:
-                self.enrollment.authorize_node_reconnect(result.identity, cert_fingerprint)
+                result = self.auth_service.authenticate(
+                    env.refresh.identity, env.refresh.credential, rid
+                )
             except Exception:
-                await self._audit("enrollment_denied", env, "rejected", reason="node_certificate_denied")
-                await self._send_error(conn, env, "AUTH_REJECTED", "node certificate denied")
+                print(f"[auth] refresh rejected request={rid} identity={env.refresh.identity} "
+                      "reason=credential_or_trust")
+                await self._send_auth_error(conn, env, "authentication failed")
                 return
-        self._connections[result.identity] = conn
-        if result.role is Role.NODE:
-            self.registry.register(result.identity, conn)
-        resp = dsm_pb2.Envelope()
-        resp.refresh_response.request_id = rid
-        resp.refresh_response.token = result.token
-        await conn.send(resp)
+            if result.role is Role.NODE:
+                try:
+                    self.enrollment.authorize_node_reconnect(result.identity, cert_fingerprint)
+                except Exception:
+                    await self._audit("enrollment_denied", env, "rejected", reason="node_certificate_denied")
+                    await self._send_auth_error(conn, env, "node certificate denied")
+                    return
+            old = self._connections.get(result.identity)
+            if old is not None and old is not conn:
+                await old.close()
+            self._connections[result.identity] = conn
+            if result.role is Role.NODE:
+                self.registry.register(result.identity, conn)
+            resp = dsm_pb2.Envelope()
+            resp.refresh_response.request_id = rid
+            resp.refresh_response.token = result.token
+            resp.coordinator_generation = self.generation.value
+            await conn.send(resp)
 
     def _validate_envelope(self, env) -> bool:
         return bool(env.identity and env.token and env.nonce and env.timestamp)
@@ -265,6 +351,12 @@ class CoordinatorServer:
         resp.error.message = message
         resp.error.ok = False
         await conn.send(resp)
+
+    async def _send_auth_error(self, conn, req, message):
+        await self._send_error(conn, req, "AUTH_REJECTED", message)
+        close = getattr(conn, "close", None)
+        if callable(close):
+            await close()
 
     @staticmethod
     def _rid_of(env):

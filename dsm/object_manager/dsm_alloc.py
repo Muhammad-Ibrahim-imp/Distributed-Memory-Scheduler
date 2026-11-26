@@ -148,6 +148,8 @@ class ObjectManager:
 
     def _generation_context(self, ctx: RequestContext) -> RequestContext:
         """Attach the active generation or reject a request from a stale runtime."""
+        if ctx.coordinator_generation == "":
+            raise ObjectUnavailableError("request has an empty coordinator generation")
         if (
             ctx.coordinator_generation is not None
             and ctx.coordinator_generation != self.coordinator_generation

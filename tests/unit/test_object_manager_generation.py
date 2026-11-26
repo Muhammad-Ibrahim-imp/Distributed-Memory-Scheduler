@@ -124,3 +124,16 @@ async def test_old_request_context_cannot_allocate_in_new_generation() -> None:
 
     with pytest.raises(ObjectUnavailableError):
         await manager.alloc(context(), "alice", 32)
+
+
+async def test_internal_context_without_generation_is_bound_to_active_generation() -> None:
+    manager, _, _ = make_manager()
+    ctx = RequestContext(identity="alice", request_id="internal")
+    object_id = await manager.alloc(ctx, "alice", 32)
+    assert object_id.startswith("generation-1.")
+
+
+async def test_empty_generation_is_rejected() -> None:
+    manager, _, _ = make_manager()
+    with pytest.raises(ObjectUnavailableError, match="empty"):
+        await manager.alloc(context(""), "alice", 32)

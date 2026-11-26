@@ -10,6 +10,10 @@ from network.tcp.connection import Connection
 from network.tcp.errors import error_to_code
 
 
+class PermanentAuthenticationError(ConnectionError):
+    """The coordinator rejected an identity that must not reconnect blindly."""
+
+
 class NodeService:
     def __init__(self, host, port, label, enrollment_secret, memory_node,
                  heartbeat_interval: float = 5.0, client_cert=None, client_key=None,
@@ -31,6 +35,9 @@ class NodeService:
         while not self._stop.is_set():
             try:
                 await self._connect_and_serve()
+            except PermanentAuthenticationError as exc:
+                print(f"[node] authentication permanently rejected: {exc}")
+                break
             except (ConnectionError, OSError) as exc:
                 print(f"[node] disconnected: {exc}; retry in 3s")
             await asyncio.sleep(3)
@@ -45,10 +52,14 @@ class NodeService:
         conn.set_handler(self._handle)
         conn.start()
         self.connection = conn
-        if self.identity and self.credential:
-            await self._refresh(conn)
-        else:
-            await self._register(conn)
+        try:
+            if self.identity and self.credential:
+                await self._refresh(conn)
+            else:
+                await self._register(conn)
+        except BaseException:
+            await conn.close()
+            raise
         hb = asyncio.create_task(self._heartbeat_loop())
         ev = asyncio.create_task(self._event_sender_loop()) if self.event_queue is not None else None
         stopped = asyncio.create_task(self._stop.wait())
@@ -70,10 +81,26 @@ class NodeService:
         env.refresh.request_id = f"refresh-{time.time_ns()}"
         env.refresh.identity = self.identity or ""
         env.refresh.credential = self.credential or ""
+        env.refresh.enrollment_secret = self.enrollment_secret
+        env.refresh.coordinator_generation = self.coordinator_generation
+        print(f"[auth] node refresh request={env.refresh.request_id} identity={self.identity} "
+              f"prior_generation={self.coordinator_generation or '<missing>'}")
         resp = await conn.call(env)
         if resp.WhichOneof("payload") == "error":
+            print(f"[auth] node refresh rejected request={env.refresh.request_id} "
+                  f"identity={self.identity} code={resp.error.code}")
+            if resp.error.code == "AUTH_REJECTED":
+                raise PermanentAuthenticationError(
+                    f"reauthentication rejected ({resp.error.code})")
             raise ConnectionError(f"reauthentication failed: {resp.error.message}")
+        if not resp.coordinator_generation:
+            raise ConnectionError("coordinator omitted its generation during reauthentication")
+        if resp.refresh_response.credential:
+            self.credential = resp.refresh_response.credential
+        self.coordinator_generation = resp.coordinator_generation
         self.token = resp.refresh_response.token
+        print(f"[auth] node refresh complete request={env.refresh.request_id} "
+              f"identity={self.identity} generation={self.coordinator_generation}")
         print(f"[node] reauthenticated as {self.identity}")
 
     async def _register(self, conn: Connection):
@@ -84,11 +111,20 @@ class NodeService:
         env.register.enrollment_secret = self.enrollment_secret
         env.register.role = "node"
         env.register.label = self.label
+        # This explicit path is required when a node process has lost its
+        # one-time credential. The coordinator accepts it only for the
+        # certificate's existing identity plus the configured enrollment factor.
+        env.register.reauthenticate = True
         resp = await conn.call(env)
         if resp.WhichOneof("payload") == "error":
+            if resp.error.code == "AUTH_REJECTED":
+                raise PermanentAuthenticationError(f"registration rejected ({resp.error.code})")
             raise ConnectionError(f"register failed: {resp.error.message}")
         self.identity = resp.register_response.identity
         self.credential = resp.register_response.credential
+        if not resp.coordinator_generation:
+            raise ConnectionError("coordinator omitted its generation during registration")
+        self.coordinator_generation = resp.coordinator_generation
         # A1: every registration issues a fresh identity; the node must use it.
         self.memory_node.update_node_identity(self.identity)
         print(f"[node] registered as {self.identity}")
@@ -103,7 +139,11 @@ class NodeService:
             return
         req = getattr(env, field)
         rid = req.request_id
-        self.coordinator_generation = env.coordinator_generation
+        if (not env.coordinator_generation or
+                env.coordinator_generation != self.coordinator_generation):
+            resp = self._error(rid, ConnectionError("obsolete coordinator generation"))
+            await self.connection.send(resp)
+            return
         ctx = self._ctx(rid)
         print(f"[node {self.label}] {field} {req.object_id}")
         resp = dsm_pb2.Envelope()
