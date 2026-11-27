@@ -10,6 +10,7 @@ class ObjectMetadata:
     size: int
     created_at: float
     sha256: str | None = None   # None until the first write()
+    sealed: bool = False
 
 
 class MetadataStore:

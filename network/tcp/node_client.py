@@ -41,6 +41,13 @@ class NodeClient:
         env.free.owner_identity = owner_identity
         await self._send_and_raise(node_id, env, ctx)
 
+    async def seal(self, ctx: RequestContext, node_id: str, object_id: str, owner_identity: str) -> None:
+        env = dsm_pb2.Envelope()
+        env.seal.request_id = ctx.request_id
+        env.seal.object_id = object_id
+        env.seal.owner_identity = owner_identity
+        await self._send_and_raise(node_id, env, ctx)
+
     async def _send_and_raise(self, node_id: str, env: dsm_pb2.Envelope,
                               ctx: RequestContext) -> dsm_pb2.Envelope:
         # Generation is supplied by A2's trusted runtime context and fenced again

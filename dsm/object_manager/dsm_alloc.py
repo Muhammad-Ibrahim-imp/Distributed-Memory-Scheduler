@@ -39,6 +39,7 @@ from common.types.errors import (
     ObjectUnavailableError,
     OutOfCapacityError,
     QuotaExceededError,
+    InvalidRequestError,
 )
 from common.types.placement import PlacementDecision
 from common.types.security import TrustState
@@ -298,6 +299,49 @@ class ObjectManager:
             raise RuntimeError("Allocation attempts ended without a node result.")
         raise last_error
 
+    async def seal(self, ctx: RequestContext, owner_identity: str, object_id: str) -> None:
+        """Atomically finalize initialized content before immutable task reads."""
+        self._ensure_current_object_id(object_id)
+        ctx = self._generation_context(ctx)
+        record = self.directory.get(object_id)
+        if record is None:
+            raise ObjectNotFoundError(object_id)
+        if not self.security.check_access(owner_identity, record.owner_identity, "write", object_id):
+            raise NotOwnerError("caller is not the object owner")
+        lock = self.directory.get_lock(object_id)
+        if lock is None:
+            raise ObjectNotFoundError(object_id)
+        async with lock:
+            record = self.directory.get(object_id)
+            if record is None:
+                raise ObjectNotFoundError(object_id)
+            if record.sealed:
+                return
+            if record.state is not ObjectState.ALLOCATED:
+                raise ObjectUnavailableError("object cannot be sealed in its current state")
+            await self._call_node(self.node_client.seal(
+                ctx, record.node_id, object_id, owner_identity
+            ))
+            record.sealed = True
+
+    async def pin_readonly(self, owner_identity: str, object_id: str) -> tuple[ObjectRecord, int]:
+        lock = self.directory.get_lock(object_id)
+        if lock is None:
+            raise ObjectNotFoundError(object_id)
+        async with lock:
+            record = self.directory.get(object_id)
+            if record is None or record.owner_identity != owner_identity:
+                raise ObjectNotFoundError(object_id)
+            if not record.sealed:
+                raise InvalidRequestError("compute inputs must be sealed")
+            if record.state is not ObjectState.ALLOCATED:
+                raise ObjectUnavailableError("compute input is unavailable")
+            record.active_readers += 1
+            return record, record.version
+
+    async def unpin(self, object_id: str) -> None:
+        await self.directory.unpin(object_id)
+
     async def read(
         self,
         ctx: RequestContext,
@@ -415,6 +459,8 @@ class ObjectManager:
                 ObjectState.REVOKED,
             ):
                 raise ObjectUnavailableError("object is not writable in its current state")
+            if record.sealed:
+                raise InvalidRequestError("sealed object is immutable")
             trust_state = self.security.get_trust_state(record.node_id)
             if trust_state in (TrustState.QUARANTINED, TrustState.REVOKED):
                 raise ObjectUnavailableError(
@@ -476,6 +522,8 @@ class ObjectManager:
             record = self.directory.get(object_id)
             if record is None:
                 return
+            if record.active_readers:
+                raise ObjectUnavailableError("object is pinned by active compute tasks")
 
             is_revoked = (
                 record.state is ObjectState.REVOKED

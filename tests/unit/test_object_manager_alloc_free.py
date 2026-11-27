@@ -72,6 +72,18 @@ async def test_alloc_stores_record_and_passes_scheduler_arguments() -> None:
     assert await manager.read(make_context(), "alice", object_id) == b""
 
 
+async def test_pinned_sealed_compute_input_cannot_be_freed() -> None:
+    manager, directory, _, _, _ = make_manager(["node-1"])
+    object_id = await manager.alloc(make_context(), "alice", 8)
+    directory.get(object_id).sealed = True
+    await manager.pin_readonly("alice", object_id)
+    with pytest.raises(ObjectUnavailableError, match="pinned"):
+        await manager.free(make_context(), "alice", object_id)
+    await manager.unpin(object_id)
+    await manager.free(make_context(), "alice", object_id)
+    assert directory.get(object_id) is None
+
+
 async def test_alloc_retries_on_node_capacity_and_uses_next_node() -> None:
     """An out-of-capacity node failure retries placement."""
     manager, directory, node, scheduler, _ = make_manager(["node-1", "node-2"])

@@ -34,6 +34,8 @@ class ObjectRecord:
     state: ObjectState = ObjectState.ALLOCATED
     unavailable_since: float | None = None
     coordinator_generation: str | None = None
+    sealed: bool = False
+    active_readers: int = 0
 
 
 class Directory:
@@ -94,6 +96,26 @@ class Directory:
 
     def get_lock(self, object_id: str) -> asyncio.Lock | None:
         return self._consistency.get_lock(object_id)
+
+    async def pin(self, object_id: str) -> tuple[ObjectRecord, int]:
+        lock = self.get_lock(object_id)
+        if lock is None:
+            raise ObjectNotFoundError(object_id)
+        async with lock:
+            record = self.get(object_id)
+            if record is None:
+                raise ObjectNotFoundError(object_id)
+            record.active_readers += 1
+            return record, record.version
+
+    async def unpin(self, object_id: str) -> None:
+        lock = self.get_lock(object_id)
+        if lock is None:
+            return
+        async with lock:
+            record = self.get(object_id)
+            if record is not None and record.active_readers:
+                record.active_readers -= 1
 
     def is_current(self, object_id: str, version: int) -> bool:
         return self._consistency.is_current(object_id, version)

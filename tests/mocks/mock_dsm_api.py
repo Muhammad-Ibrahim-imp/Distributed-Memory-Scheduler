@@ -20,6 +20,7 @@ from common.types.errors import InvalidRequestError, ObjectNotFoundError
 class MockDSMAPI:
     def __init__(self):
         self._store: dict[str, bytes] = {}
+        self._sealed: set[str] = set()
         self.calls: list[tuple] = []
         self._faults: list[tuple[str, str | None, Exception]] = []
 
@@ -58,6 +59,8 @@ class MockDSMAPI:
         self._maybe_fail("write", object_id)
         if object_id not in self._store:
             raise ObjectNotFoundError(object_id)
+        if object_id in self._sealed:
+            raise InvalidRequestError("sealed object is immutable")
         current = self._store[object_id]
         if len(data) > len(current):
             raise InvalidRequestError(
@@ -65,7 +68,15 @@ class MockDSMAPI:
             )
         self._store[object_id] = bytes(data) + current[len(data):]
 
+    async def seal(self, object_id: str) -> None:
+        self.calls.append(("seal", object_id))
+        self._maybe_fail("seal", object_id)
+        if object_id not in self._store:
+            raise ObjectNotFoundError(object_id)
+        self._sealed.add(object_id)
+
     async def free(self, object_id: str) -> None:
         self.calls.append(("free", object_id))
         self._maybe_fail("free", object_id)
         self._store.pop(object_id, None)   # unknown / already freed: silent no-op
+        self._sealed.discard(object_id)

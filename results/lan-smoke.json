@@ -1,0 +1,73 @@
+[
+  {
+    "workload": "remote_read_write",
+    "size_bytes": 4096,
+    "repeat_count": 1,
+    "read_latency_mean_s": 0.01715540001168847,
+    "write_latency_mean_s": 0.5574796999862883,
+    "read_throughput_bytes_s": 238758.6414312273,
+    "write_throughput_bytes_s": 7347.352737867845,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  },
+  {
+    "workload": "remote_read_write",
+    "size_bytes": 65536,
+    "repeat_count": 1,
+    "read_latency_mean_s": 0.27397819998441264,
+    "write_latency_mean_s": 0.19612939999205992,
+    "read_throughput_bytes_s": 239201.5131266959,
+    "write_throughput_bytes_s": 334146.74190943915,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  },
+  {
+    "workload": "checksum_adapter",
+    "end_to_end_s": 0.09090330000617541,
+    "correct": true,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  },
+  {
+    "workload": "image_invert",
+    "end_to_end_s": 29.441228500014404,
+    "correct": true,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  },
+  {
+    "workload": "image_grayscale",
+    "end_to_end_s": 32.09338880001451,
+    "correct": true,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  },
+  {
+    "workload": "image_blur",
+    "end_to_end_s": 31.955603599984897,
+    "correct": true,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  },
+  {
+    "workload": "matrix_multiply",
+    "end_to_end_s": 14.517927400011104,
+    "correct": true,
+    "scheduler_policy": "configured-on-coordinator",
+    "security_path": "TLS+authenticated token+audit",
+    "per_node_allocation_evidence": "{}",
+    "nodes_with_allocations": 0
+  }
+]

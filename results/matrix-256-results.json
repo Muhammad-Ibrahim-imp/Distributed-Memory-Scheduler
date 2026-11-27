@@ -1,0 +1,302 @@
+[
+  {
+    "dimension": 256,
+    "dtype": "float32",
+    "block_size": 128,
+    "mode": "native",
+    "input_access_mode": "direct",
+    "repetition": 0,
+    "end_to_end_s": 0.0031731999999919935,
+    "numerically_correct": true,
+    "client_wire_bytes_sent": 0,
+    "client_wire_bytes_received": 0,
+    "baseline_rss_bytes_by_process": {
+      "client": 44240896,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "peak_rss_bytes_by_process": {
+      "client": 59514880,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "aggregate_sampled_peak_rss_bytes": 76783616,
+    "sampling_interval_seconds": 0.05,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+      "logical_cpu_count": 12,
+      "blas_thread_environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      },
+      "requested_cpu_thread_limit": 1,
+      "worker_slots_per_node": 2
+    }
+  },
+  {
+    "dimension": 256,
+    "dtype": "float32",
+    "block_size": 128,
+    "mode": "native",
+    "input_access_mode": "direct",
+    "repetition": 1,
+    "end_to_end_s": 0.0036084999999843603,
+    "numerically_correct": true,
+    "client_wire_bytes_sent": 0,
+    "client_wire_bytes_received": 0,
+    "baseline_rss_bytes_by_process": {
+      "client": 44240896,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "peak_rss_bytes_by_process": {
+      "client": 59514880,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "aggregate_sampled_peak_rss_bytes": 76783616,
+    "sampling_interval_seconds": 0.05,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+      "logical_cpu_count": 12,
+      "blas_thread_environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      },
+      "requested_cpu_thread_limit": 1,
+      "worker_slots_per_node": 2
+    }
+  },
+  {
+    "dimension": 256,
+    "dtype": "float32",
+    "block_size": 128,
+    "mode": "local_tiled",
+    "input_access_mode": "direct",
+    "repetition": 0,
+    "end_to_end_s": 5.089182300000118,
+    "numerically_correct": true,
+    "input_prepare_s": 0.024283800000034717,
+    "execution_s": 4.268325200000049,
+    "output_collect_s": 0.7965733000000341,
+    "client_wire_bytes_sent": 1164664,
+    "client_wire_bytes_received": 1315943,
+    "coordinator_node_wire_bytes_sent": 1584319,
+    "coordinator_node_wire_bytes_received": 1327701,
+    "baseline_rss_bytes_by_process": {
+      "client": 44240896,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "peak_rss_bytes_by_process": {
+      "client": 59514880,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "aggregate_sampled_peak_rss_bytes": 76783616,
+    "sampling_interval_seconds": 0.05,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+      "logical_cpu_count": 12,
+      "blas_thread_environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      },
+      "requested_cpu_thread_limit": 1,
+      "worker_slots_per_node": 2
+    }
+  },
+  {
+    "dimension": 256,
+    "dtype": "float32",
+    "block_size": 128,
+    "mode": "local_tiled",
+    "input_access_mode": "direct",
+    "repetition": 1,
+    "end_to_end_s": 8.875110000000006,
+    "numerically_correct": true,
+    "input_prepare_s": 3.1697677000000226,
+    "execution_s": 4.8750928000000044,
+    "output_collect_s": 0.8302494999999794,
+    "client_wire_bytes_sent": 1633261,
+    "client_wire_bytes_received": 1317178,
+    "coordinator_node_wire_bytes_sent": 797560,
+    "coordinator_node_wire_bytes_received": 1333223,
+    "baseline_rss_bytes_by_process": {
+      "client": 44240896,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "peak_rss_bytes_by_process": {
+      "client": 59514880,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "aggregate_sampled_peak_rss_bytes": 76783616,
+    "sampling_interval_seconds": 0.05,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+      "logical_cpu_count": 12,
+      "blas_thread_environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      },
+      "requested_cpu_thread_limit": 1,
+      "worker_slots_per_node": 2
+    }
+  },
+  {
+    "dimension": 256,
+    "dtype": "float32",
+    "block_size": 128,
+    "mode": "distributed_compute",
+    "input_access_mode": "direct",
+    "repetition": 0,
+    "end_to_end_s": 7.271134599999982,
+    "numerically_correct": true,
+    "worker_task_count": 12,
+    "worker_node_ids": [
+      "c0dbce86-d38c-47ec-a65f-876c8936cee3",
+      "eb53bcaa-44c6-4b71-9d4c-83ce17acac58",
+      "ecc68464-5008-4b03-a24c-b82f5c6de6b4"
+    ],
+    "local_read_bytes": 851968.0,
+    "remote_read_bytes": 720896.0,
+    "input_prepare_s": 4.719403999999997,
+    "execution_s": 1.753893699999992,
+    "output_collect_s": 0.797836899999993,
+    "client_wire_bytes_sent": 1178726,
+    "client_wire_bytes_received": 279626,
+    "coordinator_node_wire_bytes_sent": 2064222,
+    "coordinator_node_wire_bytes_received": 1830239,
+    "baseline_rss_bytes_by_process": {
+      "client": 44240896,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "peak_rss_bytes_by_process": {
+      "client": 59514880,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "aggregate_sampled_peak_rss_bytes": 76783616,
+    "sampling_interval_seconds": 0.05,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+      "logical_cpu_count": 12,
+      "blas_thread_environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      },
+      "requested_cpu_thread_limit": 1,
+      "worker_slots_per_node": 2
+    }
+  },
+  {
+    "dimension": 256,
+    "dtype": "float32",
+    "block_size": 128,
+    "mode": "distributed_compute",
+    "input_access_mode": "direct",
+    "repetition": 1,
+    "end_to_end_s": 7.216663400000016,
+    "numerically_correct": true,
+    "worker_task_count": 12,
+    "worker_node_ids": [
+      "c0dbce86-d38c-47ec-a65f-876c8936cee3",
+      "eb53bcaa-44c6-4b71-9d4c-83ce17acac58",
+      "ecc68464-5008-4b03-a24c-b82f5c6de6b4"
+    ],
+    "local_read_bytes": 1114112.0,
+    "remote_read_bytes": 458752.0,
+    "input_prepare_s": 4.828318400000001,
+    "execution_s": 1.5754278,
+    "output_collect_s": 0.8129172000000153,
+    "client_wire_bytes_sent": 1113074,
+    "client_wire_bytes_received": 279626,
+    "coordinator_node_wire_bytes_sent": 2587793,
+    "coordinator_node_wire_bytes_received": 1565801,
+    "baseline_rss_bytes_by_process": {
+      "client": 44240896,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "peak_rss_bytes_by_process": {
+      "client": 59514880,
+      "coordinator": 4321280,
+      "node-1": 4313088,
+      "node-2": 4317184,
+      "node-3": 4317184
+    },
+    "aggregate_sampled_peak_rss_bytes": 76783616,
+    "sampling_interval_seconds": 0.05,
+    "hardware": {
+      "platform": "Windows-11-10.0.26200-SP0",
+      "processor": "Intel64 Family 6 Model 154 Stepping 4, GenuineIntel",
+      "logical_cpu_count": 12,
+      "blas_thread_environment": {
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1"
+      },
+      "requested_cpu_thread_limit": 1,
+      "worker_slots_per_node": 2
+    }
+  },
+  {
+    "dimension": 256,
+    "block_size": 128,
+    "mode": "distributed_compute",
+    "median_s": 7.243898999999999,
+    "min_s": 7.216663400000016,
+    "max_s": 7.271134599999982
+  },
+  {
+    "dimension": 256,
+    "block_size": 128,
+    "mode": "local_tiled",
+    "median_s": 6.982146150000062,
+    "min_s": 5.089182300000118,
+    "max_s": 8.875110000000006
+  },
+  {
+    "dimension": 256,
+    "block_size": 128,
+    "mode": "native",
+    "median_s": 0.003390849999988177,
+    "min_s": 0.0031731999999919935,
+    "max_s": 0.0036084999999843603
+  }
+]

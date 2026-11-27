@@ -1,0 +1,86 @@
+[
+  {
+    "dimension": 256,
+    "tile": 128,
+    "mode": "local_tiled",
+    "dtype": "float32",
+    "seed": 817,
+    "minimum_storage_bytes": 786432,
+    "estimated_working_set_bytes": 1310720,
+    "preflight": null,
+    "median_s": 0.03191490000062913,
+    "variability_s": 0.12859969999954046,
+    "peak_rss_bytes": 42164224,
+    "scheduler": "locality",
+    "requested_input_access": "direct",
+    "max_pending": 4,
+    "poll_interval_s": 0.05,
+    "io_concurrency": 1,
+    "samples": [
+      {
+        "repetition": 0,
+        "end_to_end_s": 0.14522009999927832,
+        "compute_s": 0.022470199999588658,
+        "input_prepare_s": 0.1177864999990561,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 1,
+        "end_to_end_s": 0.03191490000062913,
+        "compute_s": 0.012640699998883065,
+        "input_prepare_s": 0.01550640000095882,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 2,
+        "end_to_end_s": 0.016620399999737856,
+        "compute_s": 0.003050400000574882,
+        "input_prepare_s": 0.010071099999549915,
+        "sampled_correct": true
+      }
+    ],
+    "verification": "sampled output cells"
+  },
+  {
+    "dimension": 512,
+    "tile": 128,
+    "mode": "local_tiled",
+    "dtype": "float32",
+    "seed": 817,
+    "minimum_storage_bytes": 3145728,
+    "estimated_working_set_bytes": 7340032,
+    "preflight": null,
+    "median_s": 0.04856160000053933,
+    "variability_s": 0.006247399998756009,
+    "peak_rss_bytes": 43487232,
+    "scheduler": "locality",
+    "requested_input_access": "direct",
+    "max_pending": 4,
+    "poll_interval_s": 0.05,
+    "io_concurrency": 1,
+    "samples": [
+      {
+        "repetition": 0,
+        "end_to_end_s": 0.043679899999915506,
+        "compute_s": 0.02104429999963031,
+        "input_prepare_s": 0.018493100000341656,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 1,
+        "end_to_end_s": 0.04856160000053933,
+        "compute_s": 0.014288000000306056,
+        "input_prepare_s": 0.028102899999794317,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 2,
+        "end_to_end_s": 0.049927299998671515,
+        "compute_s": 0.023850000001402805,
+        "input_prepare_s": 0.019960199999331962,
+        "sampled_correct": true
+      }
+    ],
+    "verification": "sampled output cells"
+  }
+]

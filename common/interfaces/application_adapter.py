@@ -15,6 +15,7 @@ Rules:
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
@@ -74,10 +75,16 @@ class ApplicationAdapter(ABC):
                 if oid in seen:
                     continue
                 seen.add(oid)
-                try:
-                    await self.dsm.free(oid)
-                except DSMError as exc:
-                    failures.append((oid, exc))
+        async def release(oid: str):
+            try:
+                await self.dsm.free(oid)
+                return None
+            except DSMError as exc:
+                return oid, exc
+        # Bound outstanding cleanup RPCs so large workloads do not flood DSM.
+        for start in range(0, len(seen), 8):
+            batch = list(seen)[start:start + 8]
+            failures.extend(failure for failure in await asyncio.gather(*(release(oid) for oid in batch)) if failure)
         return failures
 
     async def run(self, input_data: Any) -> Any:

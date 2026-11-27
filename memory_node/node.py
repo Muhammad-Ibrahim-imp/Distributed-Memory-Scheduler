@@ -197,15 +197,52 @@ class MemoryNode:
         meta = self.metadata.get(object_id)            # ObjectNotFoundError
         self._check_owner(ctx, meta, owner_identity)   # NotOwnerError
         self._check_available(object_id)               # ObjectUnavailableError
+        if meta.sealed:
+            raise InvalidRequestError("sealed object is immutable")
         if len(data) > meta.size:
             raise InvalidRequestError("data is larger than the allocated size")
 
         async with self._lock_for(object_id):
+            if meta.sealed:
+                raise InvalidRequestError("sealed object is immutable")
             if self.storage.has(object_id):
                 self._wipe(ctx, object_id, owner_identity,
                            self.storage.delete(object_id))
             self.storage.put(object_id, data)
             self.metadata.set_sha256(object_id, compute_sha256(data))
+
+    async def seal(self, ctx: RequestContext, object_id: str,
+                   owner_identity: str) -> None:
+        """Make initialized contents immutable for safe task-scoped reads."""
+        meta = self.metadata.get(object_id)
+        self._check_owner(ctx, meta, owner_identity)
+        self._check_available(object_id)
+        async with self._lock_for(object_id):
+            if meta.sha256 is None:
+                raise InvalidRequestError("cannot seal an object before its first write")
+            if not verify_integrity(self.storage.get(object_id), meta.sha256):
+                raise IntegrityError("integrity check failed")
+            meta.sealed = True
+
+    async def read_sealed(self, ctx: RequestContext, object_id: str,
+                          owner_identity: str, coordinator_generation: str) -> bytes:
+        """Read sealed local RAM after task authorization, retaining node checks."""
+        self._require_text(object_id, "object_id")
+        if not object_id.startswith(f"{coordinator_generation}."):
+            raise ObjectUnavailableError("object belongs to a stale coordinator generation")
+        meta = self.metadata.get(object_id)
+        self._check_owner(ctx, meta, owner_identity)
+        self._check_available(object_id)
+        if not meta.sealed:
+            raise InvalidRequestError("direct local reads require a sealed object")
+        if meta.sha256 is None:
+            raise IntegrityError("sealed object has no integrity digest")
+        async with self._lock_for(object_id):
+            data = self.storage.get(object_id)
+            if not verify_integrity(data, meta.sha256):
+                self._report(self.audit.report_integrity_failed, object_id, ctx.request_id)
+                raise IntegrityError("integrity check failed")
+            return data
 
     async def read(self, ctx: RequestContext, object_id: str,
                    owner_identity: str) -> bytes:

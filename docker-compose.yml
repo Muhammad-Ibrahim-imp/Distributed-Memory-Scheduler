@@ -3,11 +3,16 @@ x-node-environment: &node-environment
   SECURITY_HOST: coordinator
   SECURITY_PORT: "8443"
   DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
+  DSM_COMPUTE_ENABLED: ${DSM_COMPUTE_ENABLED:-true}
+  NODE_CAPACITY_BYTES: ${NODE_CAPACITY_BYTES:-268435456}
+  NODE_COMPUTE_SLOTS: ${NODE_COMPUTE_SLOTS:-1}
+  NODE_COMPUTE_MEMORY_BYTES: ${NODE_COMPUTE_MEMORY_BYTES:-67108864}
 
 x-node-common: &node-common
   build: .
   command: python scripts/node_main.py
-  mem_limit: 512m
+  mem_limit: ${NODE_CONTAINER_MEMORY_LIMIT:-512m}
+  cpus: "${NODE_CPU_LIMIT:-2.0}"
   depends_on: [coordinator]
   networks: [dsm-net]
 
@@ -15,6 +20,8 @@ services:
   coordinator:
     build: .
     command: python scripts/coordinator_main.py
+    mem_limit: ${COORDINATOR_MEMORY_LIMIT:-1g}
+    cpus: "${COORDINATOR_CPU_LIMIT:-2.0}"
     environment:
       SERVICE_ROLE: coordinator
       SECURITY_HOST: 0.0.0.0
@@ -22,6 +29,7 @@ services:
       DSM_TOKEN_KEY: ${DSM_TOKEN_KEY:?set DSM_TOKEN_KEY in .env}
       DSM_NODE_ENROLLMENT_SECRET: ${DSM_NODE_ENROLLMENT_SECRET:?set DSM_NODE_ENROLLMENT_SECRET in .env}
       DSM_CLIENT_ENROLLMENT_SECRET: ${DSM_CLIENT_ENROLLMENT_SECRET:?set DSM_CLIENT_ENROLLMENT_SECRET in .env}
+      DSM_COMPUTE_SCHEDULER: ${DSM_COMPUTE_SCHEDULER:-locality}
     ports: ["8443:8443"]
     volumes:
       - ./configs:/app/configs:ro
@@ -35,37 +43,38 @@ services:
     <<: *node-common
     environment:
       <<: *node-environment
-      NODE_ID: node-1
-      DSM_NODE_CERT_FILE: /app/certs/nodes/node-1.pem
-      DSM_NODE_KEY_FILE: /app/certs/nodes/node-1.key
+      NODE_ID: ${NODE_1_ID:-node-1}
+      DSM_NODE_CERT_FILE: /app/certs/nodes/${NODE_1_ID:-node-1}.pem
+      DSM_NODE_KEY_FILE: /app/certs/nodes/${NODE_1_ID:-node-1}.key
     volumes:
       - ./certs/ca.pem:/app/certs/ca.pem:ro
-      - ./certs/nodes/node-1.pem:/app/certs/nodes/node-1.pem:ro
-      - ./certs/nodes/node-1.key:/app/certs/nodes/node-1.key:ro
+      - ./certs/nodes/${NODE_1_ID:-node-1}.pem:/app/certs/nodes/${NODE_1_ID:-node-1}.pem:ro
+      - ./certs/nodes/${NODE_1_ID:-node-1}.key:/app/certs/nodes/${NODE_1_ID:-node-1}.key:ro
 
   node-2:
     <<: *node-common
     environment:
       <<: *node-environment
-      NODE_ID: node-2
-      DSM_NODE_CERT_FILE: /app/certs/nodes/node-2.pem
-      DSM_NODE_KEY_FILE: /app/certs/nodes/node-2.key
+      NODE_ID: ${NODE_2_ID:-node-2}
+      DSM_NODE_CERT_FILE: /app/certs/nodes/${NODE_2_ID:-node-2}.pem
+      DSM_NODE_KEY_FILE: /app/certs/nodes/${NODE_2_ID:-node-2}.key
     volumes:
       - ./certs/ca.pem:/app/certs/ca.pem:ro
-      - ./certs/nodes/node-2.pem:/app/certs/nodes/node-2.pem:ro
-      - ./certs/nodes/node-2.key:/app/certs/nodes/node-2.key:ro
+      - ./certs/nodes/${NODE_2_ID:-node-2}.pem:/app/certs/nodes/${NODE_2_ID:-node-2}.pem:ro
+      - ./certs/nodes/${NODE_2_ID:-node-2}.key:/app/certs/nodes/${NODE_2_ID:-node-2}.key:ro
 
   node-3:
     <<: *node-common
     environment:
       <<: *node-environment
-      NODE_ID: node-3
-      DSM_NODE_CERT_FILE: /app/certs/nodes/node-3.pem
-      DSM_NODE_KEY_FILE: /app/certs/nodes/node-3.key
+      NODE_ID: ${NODE_3_ID:-node-3}
+      DSM_NODE_CERT_FILE: /app/certs/nodes/${NODE_3_ID:-node-3}.pem
+      DSM_NODE_KEY_FILE: /app/certs/nodes/${NODE_3_ID:-node-3}.key
+      DSM_COMPUTE_ENABLED: ${NODE_3_COMPUTE_ENABLED:-${DSM_COMPUTE_ENABLED:-true}}
     volumes:
       - ./certs/ca.pem:/app/certs/ca.pem:ro
-      - ./certs/nodes/node-3.pem:/app/certs/nodes/node-3.pem:ro
-      - ./certs/nodes/node-3.key:/app/certs/nodes/node-3.key:ro
+      - ./certs/nodes/${NODE_3_ID:-node-3}.pem:/app/certs/nodes/${NODE_3_ID:-node-3}.pem:ro
+      - ./certs/nodes/${NODE_3_ID:-node-3}.key:/app/certs/nodes/${NODE_3_ID:-node-3}.key:ro
 
   client:
     build: .

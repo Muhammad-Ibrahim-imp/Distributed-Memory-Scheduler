@@ -3,7 +3,26 @@ import pytest
 
 from application.matrix_multiplication.matrix_adapter import MatrixMultiplicationAdapter
 from common.types.errors import DSMTimeoutError, InvalidRequestError
+from application.matrix_multiplication.compute_handlers import register_matrix_handlers
+from compute import ComputeAPI, ComputeWorker, HandlerRegistry, TaskStatus
 from tests.mocks.mock_dsm_api import MockDSMAPI
+
+
+@pytest.mark.asyncio
+async def test_memmap_matrix_inputs_and_file_backed_output(tmp_path):
+    adapter = MatrixMultiplicationAdapter(MockDSMAPI(), block_size=4)
+    a_path, b_path, c_path = (tmp_path / "a.npy", tmp_path / "b.npy", tmp_path / "c.npy")
+    a_map = adapter.generate_memmap_matrix(a_path, (9, 7), seed=11, rows_per_chunk=3)
+    b_map = adapter.generate_memmap_matrix(b_path, (7, 11), seed=12, rows_per_chunk=2)
+    expected = np.asarray(a_map) @ np.asarray(b_map)
+    del a_map, b_map
+
+    result = await adapter.run_memmaps(a_path, b_path, c_path)
+
+    assert isinstance(result, np.memmap)
+    assert result.shape == (9, 11)
+    np.testing.assert_allclose(result, expected, rtol=1e-5, atol=1e-5)
+    assert np.load(c_path, mmap_mode="r").shape == (9, 11)
 
 
 def rand(m, n, dtype=np.float64, seed=0):
@@ -20,6 +39,16 @@ class FailAfterWrites(MockDSMAPI):
             raise DSMTimeoutError("injected")
         self.left -= 1
         await super().write(object_id, data)
+
+
+class ReadTrackingDSM(MockDSMAPI):
+    def __init__(self):
+        super().__init__()
+        self.reads = []
+
+    async def read(self, object_id):
+        self.reads.append(object_id)
+        return await super().read(object_id)
 
 
 @pytest.mark.parametrize(
@@ -45,6 +74,37 @@ async def test_2x2_block_formula(dsm):
     c = await MatrixMultiplicationAdapter(dsm, block_size=2).run((a, b))
     expected_c11 = a[:2, :2] @ b[:2, :2] + a[:2, 2:] @ b[2:, :2]
     np.testing.assert_allclose(c[:2, :2], expected_c11, rtol=1e-12)
+
+
+async def test_execute_reads_matrix_blocks_as_pairs():
+    dsm = ReadTrackingDSM()
+    a, b = rand(8, 16, seed=7), rand(16, 8, seed=8)
+    adapter = MatrixMultiplicationAdapter(dsm, block_size=8)
+    workload = await adapter.prepare((a, b))
+    a_ids = adapter._index(workload, "A")
+    b_ids = adapter._index(workload, "B")
+    dsm.reads.clear()
+
+    await adapter.execute(workload)
+
+    assert dsm.reads[:4] == [a_ids[(0, 0)], b_ids[(0, 0)], a_ids[(0, 1)], b_ids[(1, 0)]]
+
+
+async def test_compute_api_multiplies_and_reduces_blocks_on_worker():
+    dsm = MockDSMAPI()
+    registry = HandlerRegistry()
+    register_matrix_handlers(registry)
+    worker = ComputeWorker("worker-1", registry, lambda _auth, _task: dsm, max_workers=2)
+    api = ComputeAPI([worker], security_context=object(), max_pending=3)
+    a, b = rand(13, 17, seed=31), rand(17, 11, seed=32)
+
+    result = await MatrixMultiplicationAdapter(dsm, block_size=5, compute_api=api).run((a, b))
+
+    np.testing.assert_allclose(result, a @ b, rtol=1e-10, atol=1e-10)
+    assert api._results and all(r.node_id == "worker-1" and r.status is TaskStatus.COMPLETED
+                                for r in api._results.values())
+    assert dsm.live_ids == set()
+    worker.close()
 
 
 async def test_identity(dsm):

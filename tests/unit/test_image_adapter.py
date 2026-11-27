@@ -7,6 +7,8 @@ from application.image_processing.image_adapter import (
     apply_operation,
 )
 from common.types.errors import DSMTimeoutError, InvalidRequestError
+from application.image_processing.compute_handlers import register_image_handlers
+from compute import ComputeAPI, ComputeWorker, HandlerRegistry
 from tests.mocks.mock_dsm_api import MockDSMAPI
 
 
@@ -14,6 +16,31 @@ def make_image(h, w, channels=3):
     rng = np.random.default_rng(0)
     shape = (h, w, channels) if channels else (h, w)
     return rng.integers(0, 256, shape, dtype=np.uint8)
+
+
+async def test_npy_image_is_tiled_from_memmap_and_output_is_file_backed(tmp_path):
+    source_path, output_path = tmp_path / "source.npy", tmp_path / "output.npy"
+    source = np.lib.format.open_memmap(
+        source_path, mode="w+", dtype=np.uint8, shape=(33, 35, 3)
+    )
+    rng = np.random.default_rng(4)
+    for row in range(0, 33, 5):
+        source[row:row + 5] = rng.integers(
+            0, 256, (min(5, 33 - row), 35, 3), dtype=np.uint8
+        )
+    source.flush()
+    expected = apply_operation(np.asarray(source), "blur")
+    del source
+    adapter = ImageProcessingAdapter(
+        MockDSMAPI(), operation="blur", tile_height=16, tile_width=16, halo=2
+    )
+
+    result = await adapter.run_to_memmap(source_path, output_path)
+
+    assert isinstance(result, np.memmap)
+    assert result.shape == (33, 35, 3)
+    np.testing.assert_array_equal(result, expected)
+    assert isinstance(np.load(output_path, mmap_mode="r"), np.memmap)
 
 
 class FailAfterWrites(MockDSMAPI):
@@ -59,6 +86,24 @@ async def test_blur_with_halo_has_no_seams(dsm):
     adapter = ImageProcessingAdapter(dsm, operation="blur", tile_height=50, tile_width=50, halo=2)
     result = await adapter.run(image)
     assert np.array_equal(result, apply_operation(image, "blur"))
+
+
+@pytest.mark.parametrize("operation,halo", [("invert", 0), ("blur", 2)])
+async def test_compute_api_processes_tiles_and_stores_outputs(operation, halo):
+    dsm = MockDSMAPI()
+    registry = HandlerRegistry()
+    register_image_handlers(registry)
+    worker = ComputeWorker("worker-1", registry, lambda _auth, _task: dsm, max_workers=2)
+    api = ComputeAPI([worker], security_context=object(), max_pending=4)
+    image = make_image(71, 83)
+    adapter = ImageProcessingAdapter(
+        dsm, operation=operation, tile_height=24, tile_width=32, halo=halo, compute_api=api
+    )
+
+    result = await adapter.run(image)
+    np.testing.assert_array_equal(result, apply_operation(image, operation))
+    assert dsm.live_ids == set()
+    worker.close()
 
 
 def test_blur_requires_halo(dsm):

@@ -26,6 +26,17 @@ message Envelope {
     NodeStatsReport node_stats = 24;
     ErrorResponse error = 25;
     SecurityEvent security_event = 26; // A2 event forwarding
+    ComputeSubmit compute_submit = 27;
+    ComputeCancel compute_cancel = 28;
+    ComputeStatusRequest compute_status = 29;
+    ComputeWorkerRequest compute_worker = 30;
+    ComputeResponse compute_response = 31;
+    ComputeObjectAccess compute_object_access = 32;
+    ComputeObjectResponse compute_object_response = 33;
+    SealRequest seal = 34;
+    SealResponse seal_response = 35;
+    ClusterStatsRequest cluster_stats_request = 36;
+    ClusterStatsReport cluster_stats_report = 37;
   }
 }
 
@@ -41,8 +52,28 @@ message WriteRequest { string request_id = 1; string object_id = 2; string owner
 message WriteResponse { string request_id = 1; }
 message FreeRequest { string request_id = 1; string object_id = 2; string owner_identity = 3; }
 message FreeResponse { string request_id = 1; }
+message SealRequest { string request_id = 1; string object_id = 2; string owner_identity = 3; }
+message SealResponse { string request_id = 1; string object_id = 2; uint64 version = 3; }
 message StatsRequest { string request_id = 1; }
-message NodeStatsReport { string request_id = 1; string node_id = 2; uint64 total_memory = 3; uint64 used_memory = 4; uint64 available_memory = 5; double cpu_percent = 6; uint64 object_count = 7; double health = 8; }
+message NodeStatsReport {
+  string request_id = 1;
+  string node_id = 2;
+  uint64 total_memory = 3;
+  uint64 used_memory = 4;
+  uint64 available_memory = 5;
+  double cpu_percent = 6;
+  uint64 object_count = 7;
+  double health = 8;
+  repeated string compute_operations = 9;
+  uint32 compute_slots = 10;
+  uint64 compute_memory_bytes = 11;
+  uint64 coordinator_wire_bytes_sent = 12;
+  uint64 coordinator_wire_bytes_received = 13;
+  map<string, uint64> coordinator_wire_bytes_sent_by_payload = 14;
+  map<string, uint64> coordinator_wire_bytes_received_by_payload = 15;
+}
+message ClusterStatsRequest { string request_id = 1; }
+message ClusterStatsReport { string request_id = 1; repeated NodeStatsReport nodes = 2; }
 message ErrorResponse { bool ok = 1; string code = 2; string message = 3; string request_id = 4; }
 
 message SecurityEvent {
@@ -54,4 +85,65 @@ message SecurityEvent {
   string result = 6;
   string request_id = 7;
   map<string, string> extra = 8;
+}
+
+// Compute tasks carry only registered operation names and JSON parameters.
+// The coordinator assigns the authenticated caller identity; clients cannot
+// choose an object owner or claim a worker identity in these messages.
+message ComputeSubmit {
+  string request_id = 1;
+  string task_id = 2;
+  string workload_id = 3;
+  string operation = 4;
+  repeated string input_object_ids = 5;
+  string parameters_json = 6;
+  uint64 estimated_memory_bytes = 7;
+  double estimated_compute_cost = 8;
+  repeated string dependencies = 9;
+  bool direct_local_reads = 10;
+}
+message ComputeCancel { string request_id = 1; string task_id = 2; }
+message ComputeStatusRequest { string request_id = 1; string task_id = 2; }
+message ComputeWorkerRequest {
+  string request_id = 1;
+  string task_id = 2;
+  string owner_identity = 3;
+  string operation = 4;
+  repeated string input_object_ids = 5;
+  repeated string input_owners = 6;
+  string parameters_json = 7;
+  uint64 estimated_memory_bytes = 8;
+  string workload_id = 9;
+  repeated string dependencies = 10;
+  repeated string local_input_object_ids = 11;
+  repeated uint64 input_versions = 12;
+}
+message ComputeResponse {
+  string request_id = 1;
+  string task_id = 2;
+  string node_id = 3;
+  string status = 4;
+  repeated string output_object_ids = 5;
+  string output_metadata_json = 6;
+  string error = 7;
+  map<string, double> metrics = 8;
+  string operation = 9;
+  string worker_hostname = 10;
+  uint64 worker_pid = 11;
+  double execution_started_at = 12;
+  double execution_finished_at = 13;
+}
+message ComputeObjectAccess {
+  string request_id = 1;
+  string task_id = 2;
+  string operation = 3;
+  string object_id = 4;
+  uint64 size = 5;
+  bytes data = 6;
+}
+message ComputeObjectResponse {
+  string request_id = 1;
+  string object_id = 2;
+  bytes data = 3;
+  string storage_node_id = 4;
 }

@@ -74,8 +74,17 @@ class DefaultScheduler(Scheduler):
         )
 
         if not eligible_nodes:
+            snapshot = [
+                {
+                    "node_id": node.node_id,
+                    "free_ram": node.free_ram,
+                    "trust": node.security_state.value,
+                }
+                for node in nodes
+            ]
             raise RuntimeError(
-                "No eligible node available for placement."
+                "No eligible node available for placement "
+                f"(size={object_size}, nodes={snapshot})."
             )
 
         selected_node = self.policy.select(

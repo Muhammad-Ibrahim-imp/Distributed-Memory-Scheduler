@@ -1,0 +1,51 @@
+{
+  "dimension": 1024,
+  "dtype": "float32",
+  "block_size": 512,
+  "required_dense_storage_bytes_A_B_C": 12582912,
+  "configured_capacity_per_node_bytes": [
+    10485760,
+    10485760,
+    10485760
+  ],
+  "configured_cluster_capacity_bytes": 31457280,
+  "stored_bytes_after_input_preparation_by_node": {
+    "ecc68464-5008-4b03-a24c-b82f5c6de6b4": 1048576,
+    "eb53bcaa-44c6-4b71-9d4c-83ce17acac58": 7340032,
+    "c0dbce86-d38c-47ec-a65f-876c8936cee3": 0
+  },
+  "stored_bytes_during_compute_by_node": {
+    "ecc68464-5008-4b03-a24c-b82f5c6de6b4": 3145728,
+    "eb53bcaa-44c6-4b71-9d4c-83ce17acac58": 9437184,
+    "c0dbce86-d38c-47ec-a65f-876c8936cee3": 3145728
+  },
+  "peak_stored_bytes_by_node": {
+    "ecc68464-5008-4b03-a24c-b82f5c6de6b4": 3145728,
+    "eb53bcaa-44c6-4b71-9d4c-83ce17acac58": 9437184,
+    "c0dbce86-d38c-47ec-a65f-876c8936cee3": 8388608
+  },
+  "baseline_rss_bytes_by_process": {
+    "client": 77312000,
+    "coordinator": 4321280,
+    "node-1": 4313088,
+    "node-2": 4317184,
+    "node-3": 4317184
+  },
+  "peak_rss_bytes_by_process": {
+    "client": 99287040,
+    "coordinator": 4321280,
+    "node-1": 4313088,
+    "node-2": 4317184,
+    "node-3": 4317184
+  },
+  "aggregate_sampled_peak_rss_bytes": 116555776,
+  "sampling_interval_seconds": 0.05,
+  "worker_node_ids": [
+    "c0dbce86-d38c-47ec-a65f-876c8936cee3",
+    "eb53bcaa-44c6-4b71-9d4c-83ce17acac58",
+    "ecc68464-5008-4b03-a24c-b82f5c6de6b4"
+  ],
+  "task_count": 12,
+  "direct_local_read_bytes": 16777216.0,
+  "numerically_correct": true
+}

@@ -1,0 +1,86 @@
+[
+  {
+    "dimension": 256,
+    "tile": 128,
+    "mode": "native",
+    "dtype": "float32",
+    "seed": 817,
+    "minimum_storage_bytes": 786432,
+    "estimated_working_set_bytes": 1310720,
+    "preflight": null,
+    "median_s": 0.016951700001300196,
+    "variability_s": 0.09874499999932596,
+    "peak_rss_bytes": 43024384,
+    "scheduler": "locality",
+    "requested_input_access": "direct",
+    "max_pending": 4,
+    "poll_interval_s": 0.05,
+    "io_concurrency": 1,
+    "samples": [
+      {
+        "repetition": 0,
+        "end_to_end_s": 0.1138541999989684,
+        "compute_s": 0.003945700000258512,
+        "input_prepare_s": 0.10988519999955315,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 1,
+        "end_to_end_s": 0.016951700001300196,
+        "compute_s": 0.0035613000000012107,
+        "input_prepare_s": 0.013357499999983702,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 2,
+        "end_to_end_s": 0.015109199999642442,
+        "compute_s": 0.003015100000993698,
+        "input_prepare_s": 0.012055799999870942,
+        "sampled_correct": true
+      }
+    ],
+    "verification": "sampled output cells"
+  },
+  {
+    "dimension": 512,
+    "tile": 128,
+    "mode": "native",
+    "dtype": "float32",
+    "seed": 817,
+    "minimum_storage_bytes": 3145728,
+    "estimated_working_set_bytes": 7340032,
+    "preflight": null,
+    "median_s": 0.025148700000499957,
+    "variability_s": 0.002493200001481455,
+    "peak_rss_bytes": 46673920,
+    "scheduler": "locality",
+    "requested_input_access": "direct",
+    "max_pending": 4,
+    "poll_interval_s": 0.05,
+    "io_concurrency": 1,
+    "samples": [
+      {
+        "repetition": 0,
+        "end_to_end_s": 0.02357510000001639,
+        "compute_s": 0.004648500000257627,
+        "input_prepare_s": 0.01890360000106739,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 1,
+        "end_to_end_s": 0.026068300001497846,
+        "compute_s": 0.005075099999885424,
+        "input_prepare_s": 0.020965600000636186,
+        "sampled_correct": true
+      },
+      {
+        "repetition": 2,
+        "end_to_end_s": 0.025148700000499957,
+        "compute_s": 0.004854900000282214,
+        "input_prepare_s": 0.020264599999791244,
+        "sampled_correct": true
+      }
+    ],
+    "verification": "sampled output cells"
+  }
+]

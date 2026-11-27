@@ -15,10 +15,12 @@ only, so transfer and allocation stay separable.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import os
 from time import perf_counter
 from typing import Any, Callable
+from uuid import uuid4
 
 import cv2
 import numpy as np
@@ -29,6 +31,7 @@ from common.interfaces.application_adapter import (
 )
 from common.interfaces.dsm_api import DSMAPI
 from common.types.errors import IntegrityError, InvalidRequestError
+from compute import ComputeAPIClient, ComputeTask, TaskStatus
 
 
 # --- tile operations ---------------------------------------------------------
@@ -75,6 +78,7 @@ class ImageProcessingAdapter(ApplicationAdapter):
         tile_height: int = 256,
         tile_width: int = 256,
         halo: int = 0,
+        compute_api: ComputeAPIClient | None = None,
     ):
         super().__init__(dsm_api)
         if operation not in OPERATIONS:
@@ -91,12 +95,18 @@ class ImageProcessingAdapter(ApplicationAdapter):
         self.tile_height = tile_height
         self.tile_width = tile_width
         self.halo = halo
+        self.compute_api = compute_api
         self.timings: dict[str, float] = {"chunking": 0.0, "processing": 0.0, "aggregation": 0.0}
 
     # -- helpers --------------------------------------------------------------
 
     @staticmethod
     def load(path: str | os.PathLike) -> np.ndarray:
+        if os.fspath(path).lower().endswith(".npy"):
+            try:
+                return np.load(path, mmap_mode="r", allow_pickle=False)
+            except (OSError, ValueError) as exc:
+                raise InvalidRequestError(f"cannot read tiled .npy image: {path}") from exc
         image = cv2.imread(os.fspath(path), cv2.IMREAD_UNCHANGED)
         if image is None:
             raise InvalidRequestError(f"cannot read image: {path}")
@@ -164,6 +174,8 @@ class ImageProcessingAdapter(ApplicationAdapter):
                     workload.object_ids.append(oid)       # recorded BEFORE write so cleanup sees it
                     workload.layout[oid] = layout
                     await self.dsm.write(oid, payload)
+                    if self.compute_api is not None:
+                        await self.dsm.seal(oid)
         except Exception:
             await self.cleanup(workload)
             raise
@@ -171,6 +183,8 @@ class ImageProcessingAdapter(ApplicationAdapter):
         return workload
 
     async def execute(self, workload: PreparedWorkload) -> PreparedWorkload:
+        if self.compute_api is not None:
+            return await self._execute_with_compute(workload)
         func, _ = OPERATIONS[self.operation]
         processed = PreparedWorkload(object_ids=[])
         processing = 0.0
@@ -204,6 +218,52 @@ class ImageProcessingAdapter(ApplicationAdapter):
         self.timings["processing"] = processing
         return processed
 
+    async def _execute_with_compute(self, workload: PreparedWorkload) -> PreparedWorkload:
+        """Submit one registered operation task per input tile."""
+        tasks = []
+        task_layout: dict[str, dict[str, Any]] = {}
+        for oid in workload.object_ids:
+            meta = workload.layout[oid]
+            task_id = str(uuid4())
+            task_layout[task_id] = meta
+            tasks.append(ComputeTask(
+                task_id=task_id,
+                workload_id=f"image-{task_id}",
+                operation=f"image.{self.operation}",
+                input_object_ids=(oid,),
+                parameters={"shape": list(meta["shape"]), "dtype": meta["dtype"],
+                            "crop_y": meta["y0"] - meta["ey0"],
+                            "crop_x": meta["x0"] - meta["ex0"],
+                            "height": meta["y1"] - meta["y0"],
+                            "width": meta["x1"] - meta["x0"]},
+                estimated_memory_bytes=3 * int(np.prod(meta["shape"]) * np.dtype(meta["dtype"]).itemsize),
+            ))
+
+        processed = PreparedWorkload(object_ids=[])
+        started = perf_counter()
+        try:
+            await self.compute_api.submit_all(tasks)
+            results = await asyncio.gather(*(self.compute_api.wait(task.task_id) for task in tasks))
+            for result in results:
+                for output_id in result.output_object_ids:
+                    processed.object_ids.append(output_id)
+                    source = task_layout[result.task_id]
+                    processed.layout[output_id] = {
+                        "row": source["row"], "col": source["col"],
+                        "y0": source["y0"], "y1": source["y1"],
+                        "x0": source["x0"], "x1": source["x1"],
+                        **result.output_metadata,
+                        "image_shape": source["image_shape"],
+                    }
+            failed = next((r for r in results if r.status is not TaskStatus.COMPLETED), None)
+            if failed is not None:
+                raise RuntimeError(f"image task {failed.task_id} failed: {failed.error or failed.status}")
+        except Exception:
+            await self.cleanup(processed)
+            raise
+        self.timings["processing"] = perf_counter() - started
+        return processed
+
     async def collect_result(self, workload: PreparedWorkload) -> np.ndarray:
         if not workload.object_ids:
             raise InvalidRequestError("empty workload")
@@ -223,6 +283,53 @@ class ImageProcessingAdapter(ApplicationAdapter):
             raise IntegrityError("tiles do not cover the whole image")
         self.timings["aggregation"] = aggregation
         return result
+
+    async def collect_result_to_memmap(
+        self, workload: PreparedWorkload, output_path: str | os.PathLike
+    ) -> np.memmap:
+        """Reconstruct a .npy image incrementally without allocating it in RAM."""
+        if not workload.object_ids:
+            raise InvalidRequestError("empty workload")
+        first = workload.layout[workload.object_ids[0]]
+        image_shape = tuple(first["image_shape"])
+        result = np.lib.format.open_memmap(
+            output_path, mode="w+", dtype=np.dtype(first["dtype"]), shape=image_shape
+        )
+        covered = 0
+        aggregation = 0.0
+        try:
+            for oid in workload.object_ids:
+                meta = workload.layout[oid]
+                tile = self._decode(await self.dsm.read(oid), meta)
+                t0 = perf_counter()
+                result[meta["y0"]:meta["y1"], meta["x0"]:meta["x1"]] = tile
+                aggregation += perf_counter() - t0
+                covered += (meta["y1"] - meta["y0"]) * (meta["x1"] - meta["x0"])
+            if covered != image_shape[0] * image_shape[1]:
+                raise IntegrityError("tiles do not cover the whole image")
+            result.flush()
+        except Exception:
+            result.flush()
+            del result
+            try:
+                os.unlink(output_path)
+            except OSError:
+                pass
+            raise
+        self.timings["aggregation"] = aggregation
+        return result
+
+    async def run_to_memmap(
+        self, input_data: Any, output_path: str | os.PathLike
+    ) -> np.memmap:
+        """Tile a NumPy array or .npy memmap and stream output tiles to a .npy file."""
+        inputs = await self.prepare(input_data)
+        outputs = None
+        try:
+            outputs = await self.execute(inputs)
+            return await self.collect_result_to_memmap(outputs, output_path)
+        finally:
+            await self.cleanup(inputs, outputs)
 
     def estimate_memory(self, input_data: Any) -> int | None:
         """Bytes in the DSM at peak: input tiles (with halo) + output tiles."""

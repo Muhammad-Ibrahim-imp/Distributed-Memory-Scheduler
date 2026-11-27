@@ -49,6 +49,30 @@ async def test_full_sequence_alloc_write_read_free():
     assert events == []
 
 
+@run_async
+async def test_sealed_object_is_immutable_and_direct_read_is_authorized():
+    node, _ = make_node()
+    object_id = "generation-1.object-1"
+    await node.alloc(ctx(), object_id, "alice", 16)
+    await node.write(ctx(), object_id, "alice", b"immutable")
+    await node.seal(ctx(), object_id, "alice")
+    assert await node.read_sealed(ctx(), object_id, "alice", "generation-1") == b"immutable"
+    with pytest.raises(InvalidRequestError, match="sealed"):
+        await node.write(ctx(), object_id, "alice", b"changed")
+    with pytest.raises(NotOwnerError):
+        await node.read_sealed(ctx(), object_id, "bob", "generation-1")
+    with pytest.raises(ObjectUnavailableError, match="generation"):
+        await node.read_sealed(ctx(), object_id, "alice", "generation-2")
+
+
+@run_async
+async def test_uninitialized_object_cannot_be_sealed():
+    node, _ = make_node()
+    await node.alloc(ctx(), "generation-1.object-2", "alice", 16)
+    with pytest.raises(InvalidRequestError, match="before its first write"):
+        await node.seal(ctx(), "generation-1.object-2", "alice")
+
+
 # ---------- alloc ----------
 @run_async
 async def test_alloc_tracks_capacity_metadata_and_quota():

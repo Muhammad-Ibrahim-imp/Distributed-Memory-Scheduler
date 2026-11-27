@@ -26,6 +26,10 @@ Matrix Multiplication
 
 Additional application adapters may be added later without modifying the DSM core.
 
+## Distributed computation status
+
+The `compute/` package provides generic task/result contracts, registered-handler workers, bounded execution, DSM-backed outputs, and authenticated network APIs. Compute inputs are written, sealed, and pinned for task lifetime. The coordinator authorizes eligible local input IDs and versions; a worker on the storage node reads sealed bytes directly from that process's RAM. Other inputs use the existing coordinator-mediated DSM path. The local RAM read still copies the byte buffer and does not claim zero-copy. Image and matrix adapters can submit through `NetworkComputeAPI`; the three-node TLS integration test verifies that the client-host resource node and two additional node processes execute image and matrix work on one physical host. Worker crash recovery, large streamed workloads, physical multi-computer scaling, and broad performance conclusions remain unverified. See [Distributed Compute Implementation Status](docs/DISTRIBUTED_COMPUTE_STATUS.md) and the [deployment runbook](docs/DISTRIBUTED_COMPUTE_DEPLOYMENT.md).
+
 ---
 
 # 2. Level 1 Definition

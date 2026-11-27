@@ -1,0 +1,28 @@
+audit:
+  backup_count: 5
+  max_bytes: 5242880
+  path: data/lan-test/audit.jsonl
+enrollment:
+  client_secret_env: DSM_CLIENT_ENROLLMENT_SECRET
+  denylist_path: data/lan-test/denylist.json
+  node_secret_env: DSM_NODE_ENROLLMENT_SECRET
+persistence:
+  backend: sqlite
+  database_path: data/lan-test/security.db
+rate_limit:
+  connection_level:
+    bucket_capacity: 20
+    refill_per_second: 5
+  node_level:
+    max_memory_fraction_per_client: 0.5
+    max_objects_per_client: 10000
+replay_protection:
+  clock_skew_tolerance_seconds: 5
+  window_seconds: 60
+token:
+  ttl_seconds: 300
+trust_state:
+  recovery_clean_period_seconds: 300
+  suspicious_trigger:
+    failed_auths_per_window: 3
+    window_seconds: 60

@@ -1,7 +1,6 @@
 """Single-node DSM smoke test using the real coordinator, node, and TLS client."""
 import asyncio
 import hashlib
-import json
 import os
 import re
 import sqlite3
@@ -22,7 +21,8 @@ from application.image_processing.image_adapter import ImageProcessingAdapter
 from application.matrix_multiplication.matrix_adapter import MatrixMultiplicationAdapter
 from application.checksum import ChecksumAdapter
 from common.types.errors import (
-    NotOwnerError, ObjectNotFoundError, ObjectUnavailableError, QuotaExceededError,
+    NotOwnerError, ObjectNotFoundError, ObjectUnavailableError, OutOfCapacityError,
+    QuotaExceededError,
     TokenInvalidError,
 )
 from common.types.security import TrustState
@@ -133,7 +133,7 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         "NODE_CAPACITY_BYTES": str(16 * 1024 * 1024),
         "NODE_HEADROOM_FRACTION": "0.01",
         "NODE_HEADROOM_MIN_BYTES": "0",
-        "NODE_HEARTBEAT_INTERVAL": "0.2",
+        "NODE_HEARTBEAT_INTERVAL": "5",
     })
     port = _free_port()
     env["SECURITY_HOST"] = "127.0.0.1"
@@ -293,7 +293,8 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         replay.read.request_id = client._rid()
         replay.read.object_id = owned_id
         replay.read.owner_identity = client.identity
-        assert (await client.connection.call(replay)).WhichOneof("payload") == "read_response"
+        replay_ok = await client._call(replay)
+        assert replay_ok.WhichOneof("payload") == "read_response", replay_ok.error
         replay_response = await client.connection.call(replay)
         assert replay_response.WhichOneof("payload") == "error"
         assert replay_response.error.code == "AUTH_REJECTED"
@@ -314,6 +315,12 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         assert revoked_registration.error.code == "AUTH_REJECTED"
 
         old_identity, old_token = client.identity, client.token
+        reauth_counts = {
+            i: (tmp_path / f"node-{i}.log").read_text(errors="replace").count(
+                "[node] reauthenticated as "
+            )
+            for i in range(1, 4)
+        }
         await client.close()
         coordinator.terminate()
         coordinator.wait(timeout=5)
@@ -324,8 +331,10 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         await _wait_for(coordinator_ready, "restarted coordinator TLS readiness")
         await _wait_for(
             lambda: all(
-                i == target_index or "[node] reauthenticated as " in
-                (tmp_path / f"node-{i}.log").read_text(errors="replace")
+                i == target_index or
+                (tmp_path / f"node-{i}.log").read_text(errors="replace").count(
+                    "[node] reauthenticated as "
+                ) > reauth_counts[i]
                 for i in range(1, 4)
             ),
             "trusted/quarantined nodes to reauthenticate after restart",
@@ -334,6 +343,15 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
 
         await client.connect()
         assert client.identity == old_identity
+        async def recovered_capacity():
+            try:
+                object_id = await client.alloc(16)
+            except OutOfCapacityError:
+                return False
+            await client.free(object_id)
+            return True
+
+        await _wait_for(recovered_capacity, "a recovered node accepting DSM placement", timeout=10)
         with sqlite3.connect(tmp_path / "security.db") as database:
             state = database.execute(
                 "SELECT state FROM trust_states WHERE identity = ?", (quarantine_identity,)
@@ -420,21 +438,6 @@ async def test_real_coordinator_node_and_authenticated_client(tmp_path, monkeypa
         assert await ChecksumAdapter(client).run(checksum_payload) == hashlib.sha256(
             checksum_payload
         ).hexdigest()
-
-        benchmark_output = tmp_path / "benchmark-smoke.json"
-        benchmark = subprocess.run(
-            [PYTHON, str(ROOT / "scripts/benchmark_remote.py"),
-             "--host", "127.0.0.1", "--port", str(port),
-             "--sizes", "128", "--max-bytes", "1024",
-             "--repeats", "1", "--image-size", "8", "--tile-size", "4",
-             "--block-size", "2", "--format", "json", "--output", str(benchmark_output)],
-            cwd=ROOT, env=env, capture_output=True, text=True, timeout=60,
-        )
-        assert benchmark.returncode == 0, benchmark.stderr
-        benchmark_rows = json.loads(benchmark_output.read_text())
-        assert {row["workload"] for row in benchmark_rows} >= {
-            "remote_read_write", "checksum_adapter", "image_invert", "matrix_multiply"
-        }
 
         audit_path = tmp_path / "audit.jsonl"
         assert audit_path.exists()

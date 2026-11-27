@@ -63,6 +63,7 @@ class RemoteDSMAPI:
             raise RuntimeError(f"register failed: {resp.error.message}")
         self.identity = resp.register_response.identity
         self.credential = resp.register_response.credential
+        self.coordinator_generation = resp.coordinator_generation
 
     async def _refresh(self):
         """Exchange the credential for a fresh token."""
@@ -76,7 +77,10 @@ class RemoteDSMAPI:
         resp = await self.connection.call(env)
         if resp.WhichOneof("payload") == "error":
             raise code_to_error(resp.error.code, resp.error.message)
+        if not resp.coordinator_generation:
+            raise ConnectionError("coordinator omitted its generation during refresh")
         self.token = resp.refresh_response.token
+        self.coordinator_generation = resp.coordinator_generation
 
     async def _call(self, env):
         for attempt in range(31):
@@ -102,6 +106,13 @@ class RemoteDSMAPI:
         env.alloc.size = size
         return (await self._call(env)).alloc_response.object_id
 
+    async def get_cluster_stats(self):
+        """Return the coordinator's latest registered-node capacity and usage reports."""
+        env = self._env()
+        env.cluster_stats_request.request_id = self._rid()
+        response = await self._call(env)
+        return tuple(response.cluster_stats_report.nodes)
+
     async def read(self, object_id: str) -> bytes:
         env = self._env()
         env.read.request_id = self._rid()
@@ -122,4 +133,11 @@ class RemoteDSMAPI:
         env.free.request_id = self._rid()
         env.free.object_id = object_id
         env.free.owner_identity = self.identity or ""
+        await self._call(env)
+
+    async def seal(self, object_id: str) -> None:
+        env = self._env()
+        env.seal.request_id = self._rid()
+        env.seal.object_id = object_id
+        env.seal.owner_identity = self.identity or ""
         await self._call(env)

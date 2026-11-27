@@ -37,6 +37,12 @@ async def test_roundtrip():
     env.read.object_id = "obj-1"
     resp = await client.call(env, timeout=2.0)
     assert resp.read_response.data == b"pong"
+    stats = client.stats()
+    assert stats["requests_sent"] == stats["responses_received"] == 1
+    assert stats["wire_bytes_sent"] == len(env.SerializeToString()) + 4
+    assert stats["wire_bytes_received"] == len(resp.SerializeToString()) + 4
+    assert stats["wire_bytes_sent_by_payload"]["read"] == stats["wire_bytes_sent"]
+    assert stats["wire_bytes_received_by_payload"]["read_response"] == stats["wire_bytes_received"]
     await client.close(); await server.close()
 
 

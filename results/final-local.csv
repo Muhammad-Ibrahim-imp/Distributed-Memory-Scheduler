@@ -1,0 +1,3 @@
+dimension,tile,mode,dtype,seed,minimum_storage_bytes,estimated_working_set_bytes,preflight,median_s,variability_s,peak_rss_bytes,scheduler,requested_input_access,max_pending,poll_interval_s,io_concurrency,verification
+256,128,local_tiled,float32,817,786432,1310720,,0.03191490000062913,0.12859969999954046,42164224,locality,direct,4,0.05,1,sampled output cells
+512,128,local_tiled,float32,817,3145728,7340032,,0.04856160000053933,0.006247399998756009,43487232,locality,direct,4,0.05,1,sampled output cells

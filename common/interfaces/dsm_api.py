@@ -71,6 +71,10 @@ class DSMAPI(Protocol):
         """
         ...
 
+    async def seal(self, object_id: str) -> None:
+        """Make a fully initialized object immutable for compute reads."""
+        ...
+
     async def free(self, object_id: str) -> None:
         """Release the object. Idempotent: an allocated-but-never-written id
         frees normally, and an unknown or already-freed current-generation id is

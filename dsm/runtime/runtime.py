@@ -130,5 +130,8 @@ class DSMHandle(DSMAPI):
             object_id,
         )
 
+    async def seal(self, object_id: str) -> None:
+        await self._object_manager.seal(self._context(), self._identity, object_id)
+
 
 __all__ = ["DSMAPI", "DSMHandle", "Runtime"]

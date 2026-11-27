@@ -47,3 +47,11 @@ class NodeClient(Protocol):
         object_id: str,
         owner_identity: str,
     ) -> None: ...
+
+    async def seal(
+        self,
+        ctx: RequestContext,
+        node_id: str,
+        object_id: str,
+        owner_identity: str,
+    ) -> None: ...

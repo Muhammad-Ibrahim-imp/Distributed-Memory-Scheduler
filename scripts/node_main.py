@@ -4,10 +4,18 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 import asyncio
 import yaml
+import cv2
 from memory_node.node import MemoryNode
 from network.tcp.node_service import NodeService
+from compute import ComputeWorker, HandlerRegistry
+from application.image_processing.compute_handlers import register_image_handlers
+from application.matrix_multiplication.compute_handlers import register_matrix_handlers
 
 async def main():
+    cpu_threads = int(os.environ.get("NODE_CPU_THREADS", "1"))
+    if cpu_threads <= 0:
+        raise ValueError("NODE_CPU_THREADS must be positive")
+    cv2.setNumThreads(cpu_threads)
     node_id = os.environ.get("NODE_ID", "node-1")
     
     # Default to 256MB to leave headroom inside the 512MB Docker container limit
@@ -55,6 +63,19 @@ async def main():
     )
     
     # B1's service wrapping it (passing the queue)
+    compute_worker = None
+    if os.environ.get("DSM_COMPUTE_ENABLED", "true").lower() in {"1", "true", "yes"}:
+        handlers = HandlerRegistry()
+        register_image_handlers(handlers)
+        register_matrix_handlers(handlers)
+        compute_worker = ComputeWorker(
+            node_id=node_id,
+            registry=handlers,
+            authorize=lambda *_: (_ for _ in ()).throw(RuntimeError("task authorization context required")),
+            max_workers=int(os.environ.get("NODE_COMPUTE_SLOTS", 1)),
+            max_working_memory_bytes=int(os.environ.get("NODE_COMPUTE_MEMORY_BYTES", 64 * 1024 * 1024)),
+        )
+
     service = NodeService(
         host=host, port=port, label=node_id,
         enrollment_secret=secret, memory_node=memory_node,
@@ -62,6 +83,7 @@ async def main():
         event_queue=event_queue,
         client_cert=node_cert, client_key=node_key,
         server_hostname=os.environ.get("DSM_TLS_SERVER_NAME", "coordinator"),
+        compute_worker=compute_worker,
     )
     
     print(f"[node] starting {node_id} targeting {host}:{port}")
